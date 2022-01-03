@@ -1,0 +1,19 @@
+
+// #pragma target server
+
+namespace gamestate
+{
+    struct X : public IX
+    {
+    };
+}
+
+#include "Impl/ConfigureImpl.hpp"
+
+namespace configure
+{
+    void ConfigureIX(Hypodermic::ContainerBuilder &container)
+    {
+        container.registerType<gamestate::X>().as<gamestate::IX>().singleInstance();
+    }
+}

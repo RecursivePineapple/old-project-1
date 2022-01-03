@@ -1,0 +1,8 @@
+
+.ccls-cache
+.vscode
+
+bin
+dep
+obj
+old

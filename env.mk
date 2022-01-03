@@ -1,0 +1,2 @@
+DEBUG=1
+USE_CLANG=1

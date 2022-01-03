@@ -1,0 +1,7 @@
+clang++-11
+-std=c++17
+-Isrc
+-I/usr/include/postgresql/14/server
+-pedantic -Wall -Wextra -Wcast-align -Wcast-qual -Wdisabled-optimization -Wformat=2 -Winit-self -Wlogical-op -Wmissing-declarations -Wmissing-include-dirs -Wredundant-decls -Wshadow -Wsign-conversion -Werror -Wstrict-overflow=5 -Wswitch-default -Wundef -Wno-unused -Wuninitialized -Wno-error=strict-overflow -DPROTOBUF_INLINE_NOT_IN_HEADERS=0
+-Wctor-dtor-privacy -Wnoexcept -Wold-style-cast -Woverloaded-virtual -Wsign-promo -Wstrict-null-sentinel
+-DCCLS
