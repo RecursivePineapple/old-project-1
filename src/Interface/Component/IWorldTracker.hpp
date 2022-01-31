@@ -13,6 +13,8 @@ namespace gamestate
     {
         virtual ~IWorldTracker() { }
 
+        virtual IWorld* FindLoadedWorld(CR<uuid> id) = 0;
+
         virtual IWorld* FindWorld(CR<uuid> id) = 0;
 
         virtual IWorld* CreateHubWorld() = 0;

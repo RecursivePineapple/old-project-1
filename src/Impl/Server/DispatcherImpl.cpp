@@ -20,8 +20,8 @@ namespace server
 {
 
     #define ACTION_FIELDS(X) \
-        X(std::string, jsontypes::string, type) \
-        X(std::string, jsontypes::string, eid)
+        X(std::string, jsontypes::string, action) \
+        X(std::string, jsontypes::string, dst_id)
 
     DECLARE_JSON_STRUCT(action_message, ACTION_FIELDS)
 
@@ -82,23 +82,18 @@ namespace server
                 return false;
             }
 
-            if(msg.type.empty())
-            {
-                return false;
-            }
-
             NetworkMessage m(
-                std::move(msg.type),
-                std::move(msg.eid),
+                std::move(msg.action),
+                std::move(msg.dst_id),
                 tok_buffer,
                 tok_idx,
                 msg_text,
                 sender
             );
 
-            if(m.EntityId().empty())
+            if(m.DestId().empty())
             {
-                spdlog::debug("dispatching entity message");
+                spdlog::debug("dispatching subsystem message");
                 for(auto const& subsystem : m_sub_subsystems)
                 {
                     subsystem->OnMessage(m);
@@ -106,7 +101,7 @@ namespace server
             }
             else
             {
-                spdlog::debug("dispatching subsystem message");
+                spdlog::debug("dispatching entity message");
                 for(auto const& subsystem : m_entity_subsystems)
                 {
                     subsystem->OnMessage(m);
@@ -121,7 +116,7 @@ namespace server
 
 }
 
-#include "Common/Hypodermic.hpp"
+#include <Hypodermic/ContainerBuilder.h>
 
 namespace configure
 {

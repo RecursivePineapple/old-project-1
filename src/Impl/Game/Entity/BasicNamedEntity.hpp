@@ -1,121 +1,84 @@
 
 #pragma once
 
-#include <mutex>
+#include "Common/EntityMessage.hpp"
 
 #include "Interface/Game/INamedEntity.hpp"
 #include "Interface/Game/IWorld.hpp"
+#include "Interface/Game/MessageIO/Entity.hpp"
 
 namespace gamestate
 {
-    struct IBasicNamedEntity : INamedEntity
+    #define X_NOOP_FIELDS(X)
+
+    DECLARE_JSON_STRUCT(NoopState, X_NOOP_FIELDS)
+
+    template<typename TState = NoopState>
+    struct IBasicNamedEntity : public INamedEntity
     {
-        virtual bool LoadState(CR<std::string>) override { return true; }
+        using StateType = TState;
 
-        virtual std::string SaveState() override { return "{}"; }
-
-        virtual std::string SaveViewState() override { return "{}"; }
-
-        virtual bool IsLoaded() override { return true; }
-
-        virtual CR<uuid> GetId() override { return m_id; }
-        virtual void SetId(CR<uuid> id) override { m_id = id; }
-        virtual ISession* GetSession() override { return m_session; }
-        virtual CR<LocationType> GetLocation() override { return m_loc; }
-        virtual void SetLocation(CR<LocationType> loc) override
+        virtual bool LoadState(CR<std::string> msg) override
         {
-            auto old_loc = m_loc.m_loc;
-            m_loc = loc;
-            loc.m_world->OnEntityMoved(m_id, old_loc);
-
-            PushState(true);
-        }
-
-        virtual ISession* TryLock(ISession *session) override
-        {
-            std::lock_guard lock(m_session_mutex);
-
-            if(m_session != nullptr)
-            {
-                return m_session;
-            }
-            else
-            {
-                return m_session = session;
-            }
-        }
-
-        virtual bool Unlock() override
-        {
-            std::lock_guard lock(m_session_mutex);
-
-            m_session = nullptr;
-
-            return true;
-        }
-
-    protected:
-        std::mutex m_session_mutex;
-        ISession *m_session;
-        IWorld *m_world;
-        uuid m_id;
-        LocationType m_loc;
-
-        void PushState(bool loc_only = false)
-        {
-            if(m_session != nullptr)
-            {
-                if(loc_only)
-                {
-                    m_session->Broadcast(server::StringMessage::Object({
-                        {"eid", m_id.to_string()},
-                        {"x", std::to_string(m_loc.m_loc.comp.x)},
-                        {"y", std::to_string(m_loc.m_loc.comp.y)},
-                        {"z", std::to_string(m_loc.m_loc.comp.z)}
-                    }));
-                }
-                else
-                {
-                    m_session->Broadcast(server::StringMessage::Object({
-                        {"eid", m_id.to_string()},
-                        {"x", std::to_string(m_loc.m_loc.comp.x)},
-                        {"y", std::to_string(m_loc.m_loc.comp.y)},
-                        {"z", std::to_string(m_loc.m_loc.comp.z)},
-                        {"state", SaveState()}
-                    }));
-                }
-            }
-        }
-
-        template<typename TState, typename ctype = TState>
-        static bool LoadJsonState(CR<std::string> msg, std::unique_ptr<ctype> &state_ptr)
-        {
-            TState state;
-
             std::vector<jsmntok_t> toks;
             if(!server::ParseJson(toks, msg))
             {
                 return false;
             }
 
-            if(!TState::parse(toks.data(), 0, msg.data(), state))
+            if(!TState::parse(toks.data(), 0, msg.data(), m_state))
             {
                 return false;
             }
 
-            state_ptr.swap(std::unique_ptr<TState>(new TState(std::move(state))));
-
             return true;
         }
 
-        template<typename TState, typename ctype = TState>
-        static std::string SaveJsonState(CR<std::unique_ptr<ctype>> state_ptr)
+        virtual std::string SaveState() override
         {
             std::stringstream ss;
 
-            TState::emit(ss, *state_ptr);
+            TState::emit(ss, m_state);
 
             return ss.str();
+        }
+
+        IMPLEMENT_PROPERTY(uuid, Id, m_id)
+        IMPLEMENT_PROP_GETTER(TransformType, Location, m_transform)
+
+        virtual void SetLocation(CR<TransformType> transform) override
+        {
+            auto old_loc = m_transform.m_transform.m_loc;
+            m_transform = transform;
+            m_move_evt.Dispatch(this);
+        }
+        virtual void OnUpdatePhysics(CR<Transform> transform) override
+        {
+            auto old_loc = m_transform.m_transform.m_loc;
+            m_transform.m_transform = transform;
+            m_move_evt.Dispatch(this);
+        }
+
+        virtual Event<INamedEntity*>& OnMove() override
+        {
+            return m_move_evt;
+        }
+
+        virtual Event<INamedEntity*>& OnStateChanged() override
+        {
+            return m_change_evt;
+        }
+
+    protected:
+        TransformType m_transform;
+        TState m_state;
+        Event<INamedEntity*> m_move_evt;
+        Event<INamedEntity*> m_change_evt;
+
+        void SetState(CR<TState> newState)
+        {
+            m_state = newState;
+            m_change_evt.Dispatch(this);
         }
     };
 }

@@ -23,13 +23,11 @@ struct dtype;
 struct function;
 struct stored_procedure;
 struct transaction;
-struct value_like;
-struct column_like;
-struct table_like;
 struct table;
 struct column;
 struct query;
 struct join;
+struct update_table;
 
 #define BASIC_DTYPES \
     X(BOOL) \
@@ -106,13 +104,43 @@ static std::string to_sql_value(bool b)
 std::string to_sql_value(const column& col);
 std::string to_sql_value(const literal& l);
 std::string to_sql_value(const dtype& d);
+std::string to_sql_value(const function& f);
 std::string to_sql_value(const param& p);
 
+template<typename sql_value1_t, typename... sql_value_t>
+std::string to_sql_value(sql_value1_t const& first, sql_value_t const& ...rest)
+{
+    return to_sql_value(first) + ((", " + to_sql_value(rest)) + ... + "");
+}
+
+template<typename sql_value_t>
+std::string to_sql_value(const std::vector<sql_value_t> &cols)
+{
+    std::stringstream ss;
+
+    for(size_t i = 0; i < cols.size(); ++i)
+    {
+        if(i > 0)
+        {
+            ss << ", ";
+        }
+
+        ss << to_sql_value(cols[i]);
+    }
+
+    return ss.str();
+}
+
 std::string to_sql_value_ref(const column& col);
+std::string to_sql_value_ref(const function& f);
 
 std::string to_sql(const entity_name& name);
 std::string to_sql(const query& q);
+std::string to_sql(const update_table& u);
 std::string to_sql(const join& j);
+
+std::string to_preparable_sql(const query& q);
+std::string to_preparable_sql(const update_table& u);
 
 std::string to_sql_table_from(const table& t);
 std::string to_sql_table_from(const query& q);
@@ -126,6 +154,57 @@ dtype to_dtype(basic_dtype d);
 struct literal
 {
     literal(const std::string &s): m_sql(s) { }
+
+#define OP(fn, sql) \
+    template<typename B> \
+    literal fn(const B& b) \
+    { \
+        std::stringstream s; \
+        s << "(" << to_sql_value(*this) << " " sql " " << to_sql_value(b) << ")"; \
+        return s.str(); \
+    }
+#define OP2(op, sql) OP(operator op, sql)
+
+    OP2(==, "=" )
+    OP2(!=, "<>")
+    OP2(<,  "<" )
+    OP2(>,  ">" )
+    OP2(<=, "<=")
+    OP2(>=, ">=")
+
+    OP2(+, "+")
+    OP2(-, "-")
+    OP2(*, "*")
+    OP2(/, "/")
+    OP2(%, "%")
+    OP2(^, "^")
+
+    OP2(&&, "AND")
+    OP2(||, "OR")
+
+    OP(str_concat, "||")
+    OP(is_in, "IN")
+    OP(is_not_in, "NOT IN")
+    OP(is_like, "~~")
+    OP(is_not_like, "~~~")
+    
+    literal operator!()
+    {
+        std::stringstream s;
+        s << "(NOT " << to_sql_value(*this) << ")";
+        return s.str();
+    }
+
+    template<typename B>
+    literal expr(const std::string &op, const B& b)
+    {
+        std::stringstream s;
+        s << "(" << to_sql_value(*this) << " " << op << " " << to_sql_value(b) << ")";
+        return s.str();
+    }
+
+#undef OP
+#undef OP2
 
     std::string m_sql;
 };
@@ -257,6 +336,47 @@ struct join
     std::string m_condition;
 };
 
+struct function
+{
+    template<typename... param_types>
+    function(std::string const& fn, param_types... params)
+    {
+        m_function = fn;
+        m_params = {
+            to_sql_value(params)...
+        };
+    }
+
+    function& as(const std::string &alias)
+    {
+        m_alias = alias;
+        return *this;
+    }
+
+    std::string m_function;
+    std::vector<std::string> m_params;
+    std::optional<std::string> m_alias;
+};
+
+struct functions
+{
+    functions() = delete;
+
+    #define FUNCTION_LIST_X(X) \
+        X(max, "MAX") \
+        X(min, "MIN") \
+        X(coalesce, "COALESCE")
+
+    #define X(name, sql) \
+        template<typename... param_types> \
+        static auto name(param_types... params) { return function(sql, params...); }
+    
+    FUNCTION_LIST_X(X)
+
+    #undef X
+
+};
+
 typedef enum
 {
     NONE = 0,
@@ -266,10 +386,28 @@ typedef enum
 
 struct query
 {
-    template<typename table_t>
-    query(const table_t &tbl, const std::vector<column> &cols) :
-        m_table(to_sql_table_from(tbl)), m_cols(cols)
+    template<typename table_t, typename... sql_column_t>
+    query(
+        const table_t &tbl,
+        sql_column_t const& ...cols
+    ) : m_table(to_sql_table_from(tbl)),
+        m_cols(to_sql_value(cols...)),
+        m_col_refs({ to_sql_value_ref(cols)... })
     { }
+
+    template<typename table_t, typename sql_column_t>
+    query(
+        const table_t &tbl,
+        const std::vector<sql_column_t> &cols
+    ) : m_table(to_sql_table_from(tbl)),
+        m_cols(to_sql_value(cols))
+    {
+        m_col_refs.reserve(cols.size());
+        for(size_t i = 0; i < cols.size(); ++i)
+        {
+            m_col_refs.push_back(to_sql_value_ref(cols[i]));
+        }
+    }
 
     template<typename sql_value_t>
     query& where(const sql_value_t &constraint)
@@ -384,9 +522,9 @@ struct query
 
     column col(const std::string &colname)
     {
-        for(const auto& col : m_cols)
+        for(const auto& col : m_col_refs)
         {
-            if(to_sql_value_ref(col) == colname)
+            if(col == colname)
             {
                 return column(*this, colname);
             }
@@ -395,13 +533,26 @@ struct query
         RAISE_ERROR("error: could not find column '" + colname + "' in query");
     }
 
-    query select(std::initializer_list<struct column> cols)
+    template<typename... sql_column_t>
+    query select(sql_column_t const& ...cols)
     {
-        return query(*this, std::vector<struct column>(cols));
+        return query(*this, cols...);
+    }
+
+    template<typename sql_column_t>
+    query select(const std::vector<sql_column_t> &cols)
+    {
+        return query(*this, cols);
+    }
+
+    operator std::string() const
+    {
+        return to_preparable_sql(*this);
     }
 
     std::string m_table;
-    std::vector<column> m_cols;
+    std::string m_cols;
+    std::vector<std::string> m_col_refs;
     std::vector<join> m_joins;
 
     std::optional<std::string> m_constraint;
@@ -413,13 +564,53 @@ struct query
     std::optional<std::string> m_alias;
 };
 
+struct update_table
+{
+    template<typename table_t>
+    update_table(
+        const table_t &tbl
+    ) : m_table(to_sql_table_from(tbl))
+    { }
+
+    template<typename col_t, typename sql_value_t>
+    update_table& set(const col_t &col, const sql_value_t &value)
+    {
+        m_updates[to_sql_value(col)] = to_sql_value(value);
+        return *this;
+    }
+
+    template<typename sql_value_t>
+    update_table& where(const sql_value_t &constraint)
+    {
+        m_constraint = to_sql_value(constraint);
+        return *this;
+    }
+
+    template<typename sql_value1_t, typename... sql_value_t>
+    update_table& returning(sql_value1_t const& first, sql_value_t const& ...constraints)
+    {
+        m_returning = to_sql_value(first) + (... + (", " + to_sql_value(constraints)));
+        return *this;
+    }
+
+    operator std::string() const
+    {
+        return to_preparable_sql(*this);
+    }
+
+    std::string m_table;
+    std::vector<std::pair<std::string, std::string>> m_updates;
+    std::optional<std::string> m_constraint;
+    std::optional<std::string> m_returning;
+};
+
 struct table
 {
 public:
 
-    table(database *db, const entity_name &name) : m_db(db), m_name(name), m_alias("") { }
+    table(const entity_name &name) : m_name(name), m_alias("") { }
 
-    table(database *db, const std::string &name) : m_db(db), m_name(name), m_alias("") { }
+    table(const std::string &name) : m_name(name), m_alias("") { }
 
     table& as(const std::string &alias)
     {
@@ -432,14 +623,19 @@ public:
         return column(*this, colname);
     }
 
-    query select(std::initializer_list<struct column> cols)
+    template<typename... sql_column_t>
+    query select(sql_column_t const& ...cols)
     {
-        return query(*this, std::vector<struct column>(cols));
+        return query(*this, cols...);
+    }
+
+    update_table update()
+    {
+        return update_table(*this);
     }
 
     const std::map<std::string, struct column>& get_columns();
 
-    database *m_db;
     entity_name m_name;
     std::string m_alias;
 

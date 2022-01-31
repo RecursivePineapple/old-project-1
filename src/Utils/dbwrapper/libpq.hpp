@@ -351,25 +351,68 @@ struct tuple_extractor<T, Rest...>
     }
 };
 
-template<typename... dtypes>
-auto to_tuples(const result& res)
+template<typename... ctypes>
+auto to_tuples(const result& res) -> std::vector<decltype(tuple_extractor<ctypes...>::extract(res, 0))>
 {
     int n = res.ntuples();
 
-    std::vector<decltype(tuple_extractor<dtypes...>::extract(res, 0))> v;
+    std::vector<decltype(tuple_extractor<ctypes...>::extract(res, 0))> v;
 
     for(int i = 0; i < n; ++i)
     {
-        v.emplace(std::move(tuple_extractor<dtypes...>::extract(res, i)));
+        v.emplace(std::move(tuple_extractor<ctypes...>::extract(res, i)));
     }
 
     return v;
 }
 
-template<typename... dtypes>
-decltype(tuple_extractor<dtypes...>::extract(std::declval<const result&>(), 0)) to_tuple(const result& res, int row)
+template<typename... ctypes>
+auto to_tuple(const result& res, int row) -> decltype(tuple_extractor<ctypes...>::extract(std::declval<const result&>(), 0))
 {
-    return tuple_extractor<dtypes...>::extract(res, row);
+    return tuple_extractor<ctypes...>::extract(res, row);
+}
+
+template<typename... ctypes, auto... Is>
+std::optional<std::tuple<ctypes...>> to_nonoptional_tuple_impl(std::tuple<std::optional<ctypes>...> const& tpl, std::index_sequence<Is...>)
+{
+    bool all_valid = (std::get<Is>(tpl).has_value() && ... && true);
+
+    if(!all_valid)
+    {
+        return std::optional<std::tuple<ctypes...>>();
+    }
+
+    return std::tuple<ctypes...>(
+        (std::get<Is>(tpl).value())...
+    );
+}
+
+template<typename... ctypes>
+std::optional<std::tuple<ctypes...>> to_nonoptional_tuple(std::tuple<std::optional<ctypes>...> const& tpl)
+{
+    return to_nonoptional_tuple_impl<ctypes...>(tpl, std::index_sequence_for<ctypes...>{});
+}
+
+template<typename... ctypes>
+decltype(auto) to_nonoptional_tuple(const result& res, int row)
+// -> decltype(to_nonoptional_tuple<ctypes...>(to_tuple<ctypes...>(std::declval<const result&>(), 0)))
+{
+    return to_nonoptional_tuple<ctypes...>(to_tuple<ctypes...>(res, row));
+}
+
+template<typename... ctypes>
+auto to_nonoptional_tuples(const result& res)
+{
+    int n = res.ntuples();
+
+    std::vector<decltype(to_nonoptional_tuple<ctypes...>(tuple_extractor<ctypes...>::extract(res, 0)))> v;
+
+    for(int i = 0; i < n; ++i)
+    {
+        v.emplace(std::move(to_nonoptional_tuple<ctypes...>(tuple_extractor<ctypes...>::extract(res, i))));
+    }
+
+    return v;
 }
 
 enum value_format : int
@@ -378,17 +421,17 @@ enum value_format : int
     BINARY = 1,
 };
 
-struct query_param
+struct param_value
 {
     template<typename iter>
-    query_param(Oid type, value_format format, iter begin, iter end): m_type(type), m_format(format), m_value(begin, end) { }
+    param_value(Oid type, value_format format, iter begin, iter end): m_type(type), m_format(format), m_value(begin, end) { }
 
-    query_param(Oid type, value_format format, const std::vector<char>& value): m_type(type), m_format(format), m_value(value) { }
+    param_value(Oid type, value_format format, const std::vector<char>& value): m_type(type), m_format(format), m_value(value) { }
 
-    query_param(Oid type, value_format format, const std::string& value):
+    param_value(Oid type, value_format format, const std::string& value):
         m_type(type), m_format(format), m_value(value.begin(), value.end()) { }
 
-    query_param(basic_dtype type, const std::string& value):
+    param_value(basic_dtype type, const std::string& value):
         m_type(lookup_oid(type)), m_format(PLAIN_TEXT), m_value(value.begin(), value.end()) { }
 
     Oid m_type;
@@ -410,7 +453,7 @@ struct prepared_query
         }
     }
 
-    result exec(const std::vector<struct query_param>& param_values = {}, value_format format = value_format::PLAIN_TEXT)
+    result exec(const std::vector<struct param_value>& param_values = {}, value_format format = value_format::PLAIN_TEXT)
     {
         std::vector<const char*> values;
         std::vector<int> lengths, formats;
@@ -535,6 +578,52 @@ private:
     }
 };
 
+std::shared_ptr<prepared_query> prepare(
+    const std::shared_ptr<PGconn> &m_pconn,
+    const std::string& cmd, const std::vector<struct param_value>& param_types,
+    const std::string& name);
+
+result exec(
+    const std::shared_ptr<PGconn> &m_pconn,
+    const std::string& cmd);
+
+result execParams(
+    const std::shared_ptr<PGconn> &m_pconn,
+    const std::string& cmd, const std::vector<struct param_value>& params = {},
+    value_format format = value_format::PLAIN_TEXT);
+
+template<basic_dtype... types>
+std::shared_ptr<prepared_query2<types...>> prepare2(
+    const std::shared_ptr<PGconn> &m_pconn,
+    const std::string& cmd, const std::string& name)
+{
+    std::vector<Oid> oids = {
+        lookup_oid(types)...
+    };
+
+    return std::make_shared<prepared_query2<types...>>(m_pconn, name, true,
+        execute([&](){
+            return PQprepare(m_pconn.get(), name.c_str(), cmd.c_str(), oids.size(), oids.data());
+        }, "[prepare]", cmd));
+}
+
+template<basic_dtype... types>
+result execParams(
+    const std::shared_ptr<PGconn> &m_pconn,
+    const std::string& cmd, typename conversion<types>::ctype... params)
+{
+    return execParams(m_pconn, cmd, {
+        param_value(lookup_oid(types), PLAIN_TEXT, conversion<types>::to_pg(params))...
+    });
+}
+
+struct wrapped_table : public table
+{
+    
+    std::shared_ptr<PGconn> m_pconn;
+
+};
+
 struct database
 {
     database(): m_pconn(nullptr) { }
@@ -581,117 +670,37 @@ struct database
         return m_pconn != nullptr;
     }
 
-    std::shared_ptr<prepared_query> prepare(const std::string& cmd, const std::string& name, const std::vector<struct query_param>& param_types = {})
+    std::shared_ptr<prepared_query> prepare(
+        const std::string& cmd, const std::vector<struct param_value>& param_types,
+        const std::string& name)
     {
-        std::vector<Oid> oids;
-        oids.reserve(param_types.size());
-
-        for(const auto& param : param_types)
-        {
-            oids.push_back(static_cast<Oid>(param.m_format));
-        }
-
-        return std::make_shared<prepared_query>(m_pconn, name, true,
-            execute([&](){
-                return PQprepare(m_pconn.get(), name.c_str(), cmd.c_str(), oids.size(), oids.data());
-            }, "[prepare]", cmd));
-    }
-
-    std::shared_ptr<prepared_query> prepare(const query& cmd, const std::string& name, const std::vector<struct query_param>& param_types = {})
-    {
-        return prepare(to_sql(cmd), name, param_types);
-    }
-
-    std::shared_ptr<prepared_query> prepare(const query& cmd, const std::vector<struct query_param>& param_types = {})
-    {
-        return prepare(to_sql(cmd), cmd.m_alias ? cmd.m_alias.value() : get_prepared_query_name(), param_types);
+        return ::dbwrapper::libpq::prepare(m_pconn, cmd, param_types, name);
     }
 
     template<basic_dtype... types>
-    std::shared_ptr<prepared_query2<types...>> prepare2(const std::string& cmd, const std::string& name)
+    std::shared_ptr<prepared_query2<types...>> prepare2(
+        const std::string& cmd,
+        const std::string& name)
     {
-        std::vector<Oid> oids = {
-            lookup_oid(types)...
-        };
-
-        return std::make_shared<prepared_query2<types...>>(m_pconn, name, true,
-            execute([&](){
-                return PQprepare(m_pconn.get(), name.c_str(), cmd.c_str(), oids.size(), oids.data());
-            }, "[prepare]", cmd));
-    }
-
-    template<basic_dtype... types>
-    std::shared_ptr<prepared_query2<types...>> prepare2(const query& cmd, const std::string& name)
-    {
-        return prepare2<types...>(to_sql(cmd), name);
-    }
-
-    template<basic_dtype... types>
-    std::shared_ptr<prepared_query2<types...>> prepare2(const query& cmd)
-    {
-        return prepare2<types...>(to_sql(cmd), cmd.m_alias ? cmd.m_alias.value() : get_prepared_query_name());
+        return ::dbwrapper::libpq::prepare2<types...>(m_pconn, cmd, name);
     }
 
     result exec(const std::string& cmd)
     {
-        return execute([&](){return PQexec(m_pconn.get(), cmd.c_str());}, "[exec]", cmd);
+        return ::dbwrapper::libpq::exec(m_pconn, cmd);
     }
 
-    result exec(const query& cmd)
+    result execParams(
+        const std::string& cmd, const std::vector<struct param_value>& params = {},
+        value_format format = value_format::PLAIN_TEXT)
     {
-        return exec(to_sql(cmd));
-    }
-
-    result execParams(const std::string& cmd, const std::vector<struct query_param>& params = {},
-            value_format format = value_format::PLAIN_TEXT)
-    {
-        std::vector<Oid> oids;
-        std::vector<const char*> values;
-        std::vector<int> lengths, formats;
-
-        oids.reserve(params.size());
-        values.reserve(params.size());
-        lengths.reserve(params.size());
-        formats.reserve(params.size());
-
-        for(const auto& param : params)
-        {
-            oids.push_back(param.m_type);
-            values.push_back(param.m_value.data());
-            lengths.push_back(param.m_value.size());
-            formats.push_back(param.m_format);
-        }
-
-        return execute([&]()
-        {
-            return PQexecParams(
-                m_pconn.get(),
-                cmd.c_str(),
-                params.size(), oids.data(), values.data(), lengths.data(), formats.data(),
-                format);
-        }, "[exec-params]", cmd);
-    }
-
-    result execParams(const query& cmd, const std::vector<struct query_param>& params = {},
-            value_format format = value_format::PLAIN_TEXT)
-    {
-        return execParams(to_sql(cmd), params, format);
+        return ::dbwrapper::libpq::execParams(m_pconn, cmd, params, format);
     }
 
     template<basic_dtype... types>
     result execParams(const std::string& cmd, typename conversion<types>::ctype... params)
     {
-        return execParams(cmd, {
-            query_param(lookup_oid(types), PLAIN_TEXT, conversion<types>::to_pg(params))...
-        });
-    }
-
-    template<basic_dtype... types>
-    result execParams(const query& cmd, typename conversion<types>::ctype... params)
-    {
-        return execParams(to_sql(cmd), {
-            query_param(lookup_oid(types), PLAIN_TEXT, conversion<types>::to_pg(params))...
-        });
+        return ::dbwrapper::libpq::execParams<types...>(m_pconn, cmd, params...);
     }
 
     std::string get_prepared_query_name()
@@ -707,12 +716,12 @@ struct database
 
     table tbl(const entity_name& name)
     {
-        return table(this, name);
+        return table(name);
     }
 
     table tbl(const std::string& name)
     {
-        return table(this, name);
+        return table(name);
     }
 
     dtype type(const entity_name& name)

@@ -10,56 +10,19 @@ namespace gamestate
 {
     struct Player : public IPlayer
     {
-        virtual SP<server::IConnection> GetConnection() override
-        {
-            return m_connection;
-        }
+        IMPLEMENT_PROPERTY(IWorld*, World, m_world)
+        
+        IMPLEMENT_PROPERTY(SP<server::IConnection>, Connection, m_connection)
 
-        virtual void SetConnection(SPCR<server::IConnection> conn) override
-        {
-            m_connection = conn;
-        }
+        IMPLEMENT_PROPERTY(SP<INamedEntity>, Entity, m_entity)
+        
+        IMPLEMENT_PROPERTY(PlayerAuthInfo, AuthInfo, m_auth_info)
 
         virtual bool IsAuthenticated() override
         {
             return m_auth_info.is_authenticated;
         }
 
-        virtual CR<PlayerAuthInfo> GetAuthInfo() override
-        {
-            return m_auth_info;
-        }
-
-        virtual void SetAuthInfo(CR<PlayerAuthInfo> info) override
-        {
-            m_auth_info = info;
-        }
-    
-        virtual void SetEntity(SPCR<INamedEntity> entity) override { m_entity = entity; }
-
-        virtual SP<INamedEntity> GetEntity() override { return m_entity; }
-
-        virtual ISession* GetSession() override
-        {
-            return m_session;
-        }
-
-        virtual void SetSession(ISession* session) override
-        {
-            m_session = session;
-
-            if(m_current_world != session->GetWorld())
-            {
-                
-            }
-        }
-
-    private:
-        IWorld *m_current_world;
-        ISession* m_session;
-        SP<server::IConnection> m_connection;
-        PlayerAuthInfo m_auth_info;
-        SP<INamedEntity> m_entity;
     };
 }
 

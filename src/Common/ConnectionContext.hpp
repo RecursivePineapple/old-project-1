@@ -10,10 +10,7 @@ namespace gamestate
     struct IPlayer;
 }
 
-namespace server
+struct ConnectionContext
 {
-    struct ConnectionContext
-    {
-        SP<gamestate::IPlayer> m_player;
-    };
-}
+    SP<gamestate::IPlayer> m_player;
+};

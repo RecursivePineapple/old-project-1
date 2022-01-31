@@ -91,7 +91,7 @@ struct uuid
     std::string to_string() const
     {
         std::string s;
-        s.resize(UUID_STR_LEN);
+        s.resize(UUID_STR_LEN-1);
         uuid_unparse(value, s.data());
         return s;
     }

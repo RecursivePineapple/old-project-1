@@ -5,11 +5,12 @@
 #include <string_view>
 #include <vector>
 #include <map>
-#include <unordered_map>
-#include <tuple>
 #include <algorithm>
 #include <string.h>
 #include <stdexcept>
+#include <variant>
+
+#include <iostream>
 
 #define JSMN_STATIC
 #define JSMN_PARENT_LINKS
@@ -17,35 +18,76 @@
 
 #include "decimal.hpp"
 
+namespace jsonstruct_utils
+{
+    template <auto func, std::size_t I>
+    struct param_type;
+
+    template <typename Ret, typename... Args, Ret (*func)(Args...), std::size_t I>
+    struct param_type<func, I>
+    {
+        using type = std::tuple_element_t<I, std::tuple<Args...>>;
+    };
+
+    template <typename Ret, typename... Args, Ret (*func)(Args..., ...), std::size_t I>
+    struct param_type<func, I>
+    {
+        using type = std::tuple_element_t<I, std::tuple<Args...>>;
+    };
+
+    template<auto func, size_t I>
+    using param_type_t = typename param_type<func, I>::type;
+
+    template<typename T, typename R>
+    static const R& convert(T const& t)
+    {
+        return t;
+    }
+
+    template<typename T, typename R>
+    static R convert(T const& t)
+    {
+        return static_cast<R>(t);
+    }
+
+    template<typename, typename R>
+    static R convert(std::optional<R> const& o)
+    {
+        return o.value();
+    }
+}
+
 #define _DECL_STRUCT_FIELD_X(ctype, type, name) ctype name = ctype();
 
 #define _DECL_STRUCT_E_FIELDNO_X(ctype, type, name) fieldno_##name,
 
 #define _PARSE_STRUCT_FIELD_X(ctype, type, name) \
-    case fieldno_##name: { \
-        ctype v; \
+    case field_numbers::fieldno_##name: { \
+        std::remove_reference_t<jsonstruct_utils::param_type_t<type::parse, 3>> v; \
         if(!type::parse(__toks, __tok, __str, v)) { return false; } \
-        __value.name = std::move(v); \
+        __value.name = v; \
         break; \
     }
 
-#define _EMIT_STRUCT_FIELD_X(ctype, type, name) s << #name ":"; type::emit(s, __value.name); if(fieldno_##name < fn_count - 1) s << ",";
+#define _EMIT_STRUCT_FIELD_X(_ctype, type, name) \
+    s << #name ":"; type::emit(s, jsonstruct_utils::convert<ctype, type::ctype>(__value.name)); \
+    if(static_cast<int>(field_numbers::fieldno_##name) < static_cast<int>(field_numbers::fn_count) - 1) s << ",";
 
-#define _FIELDS_PUSH_X(ctype, type, name) _fields[#name] = static_cast<int>(fieldno_##name);
+#define _FIELDS_PUSH_X(ctype, type, name) _fields[#name] = field_numbers::fieldno_##name;
 
-#define _FIELDS_PUSH2_X(ctype, type, name) if(key == #name) { n=fieldno_##name; return true; }
+#define _FIELDS_PUSH2_X(ctype, type, name) if(key == #name) { n=field_numbers::fieldno_##name; return true; }
 
 #define _FIELDNO_ALGO_IFS(X_FIELDS) \
-    static bool fieldno(std::string const& key, int &n) { \
+    static bool fieldno(std::string const& key, field_numbers &n) { \
+        (void)key;(void)n; \
         X_FIELDS(_FIELDS_PUSH2_X) \
         return false; \
     }
 
 #define _FIELDNO_ALGO_MAP(X_FIELDS) \
-    static bool fieldno(std::string const& name, int &n) { \
-        static int initialized = 0; static std::map<std::string, int>  _fields; \
+    static bool fieldno(std::string const& name, field_numbers &n) { \
+        static int initialized = 0; static std::map<std::string, field_numbers>  _fields; \
         if(!initialized) { \
-            int fieldno=0; \
             X_FIELDS(_FIELDS_PUSH_X) \
             initialized = 1; \
         } \
@@ -58,11 +100,12 @@
         } \
     }
 
-#define _DECLARE_JSON_STRUCT(name, X_FIELDS, FIELDNO_ALGO) \
-    struct name { \
+#define _DECLARE_JSON_STRUCT_BODY(name, X_FIELDS, FIELDNO_ALGO) \
+        typedef name ctype; \
+        enum class field_numbers: int { X_FIELDS(_DECL_STRUCT_E_FIELDNO_X) fn_count }; \
         X_FIELDS(_DECL_STRUCT_FIELD_X) \
-        enum field_numbers { X_FIELDS(_DECL_STRUCT_E_FIELDNO_X) fn_count }; \
         static bool parse(const jsmntok_t *__toks, int __tok, const char *__str, name &__value) { \
+            (void)__value; \
             if(__toks[__tok].type != JSMN_OBJECT) return false;  \
             int size = __toks[__tok].size; \
             __tok++; \
@@ -70,7 +113,7 @@
             for(int i = 0; i < size; ++i) { \
                 if(!jsontypes::string::parse(__toks, __tok, __str, k)) { return false; } \
                 __tok = jsontypes::next_token(__toks, __tok); \
-                int fn = 0; \
+                field_numbers fn; \
                 if(!fieldno(k, fn)) { __tok = jsontypes::next_token(__toks, __tok); continue; } \
                 switch(fn) { \
                     X_FIELDS(_PARSE_STRUCT_FIELD_X) \
@@ -82,17 +125,27 @@
         } \
         template<typename stream> \
         static stream& emit(stream &s, name const& __value) { \
+            (void)__value; \
             s << "{"; \
             X_FIELDS(_EMIT_STRUCT_FIELD_X) \
             s << "}"; \
             return s; \
         } \
+    private: \
         FIELDNO_ALGO(X_FIELDS) \
+    public:
+
+#define _DECLARE_JSON_STRUCT(name, X_FIELDS, FIELDNO_ALGO) \
+    struct name { \
+        _DECLARE_JSON_STRUCT_BODY(name, X_FIELDS, FIELDNO_ALGO) \
     };
+
+#define DECLARE_JSON_STRUCT_BODY_SMALL(name, X_FIELDS) _DECLARE_JSON_STRUCT_BODY(name, X_FIELDS, _FIELDNO_ALGO_IFS)
+#define DECLARE_JSON_STRUCT_BODY_LARGE(name, X_FIELDS) _DECLARE_JSON_STRUCT_BODY(name, X_FIELDS, _FIELDNO_ALGO_MAP)
+#define DECLARE_JSON_STRUCT_BODY(name, X_FIELDS) DECLARE_JSON_STRUCT_BODY_SMALL(name, X_FIELDS)
 
 #define DECLARE_JSON_STRUCT_SMALL(name, X_FIELDS) _DECLARE_JSON_STRUCT(name, X_FIELDS, _FIELDNO_ALGO_IFS)
 #define DECLARE_JSON_STRUCT_LARGE(name, X_FIELDS) _DECLARE_JSON_STRUCT(name, X_FIELDS, _FIELDNO_ALGO_MAP)
-
 #define DECLARE_JSON_STRUCT(name, X_FIELDS) DECLARE_JSON_STRUCT_SMALL(name, X_FIELDS)
 
 namespace fastconvert
@@ -260,6 +313,11 @@ namespace jsontypes
         bool ParseInto(T &value)
         {
             return T::parse(toks, start, str, value);
+        }
+
+        std::string Text()
+        {
+            return std::string(str, static_cast<size_t>(end - start + 1));
         }
     };
 
@@ -478,14 +536,16 @@ namespace jsontypes
     {
         s << "[";
 
-        for(int i = 0; i < value.size(); ++i)
+        for(size_t i = 0; i < value.size(); ++i)
         {
             switch(i)
             {
                 default:
                     s << ",";
+                    goto zero;
                 case 0:
-                    s = T::emit(s, value[i]);
+                zero:
+                    T::emit(s, value[i]);
                     break;
             }
         }
@@ -763,6 +823,71 @@ namespace jsontypes
         {
             (void)value;
             throw std::runtime_error("cannot emit span");
+            return s;
+        }
+
+        static void foo() { }
+    };
+
+    template<typename... T>
+    struct variant
+    {
+    private:
+        template<typename _T>
+        struct _has_parse
+        {
+        private:
+            template<typename C> static char  check(decltype(&C::parse));
+            template<typename C> static short check(...);
+        public:
+            enum { value = sizeof(check<_T>(0)) == sizeof(char) };
+        };
+        template<typename _T>
+        struct _has_emit
+        {
+        private:
+            template<typename C> static char  check(decltype(&C::emit));
+            template<typename C> static short check(...);
+        public:
+            enum { value = sizeof(check<_T>(0)) == sizeof(char) };
+        };
+    public:
+
+        typedef std::variant<ctype_t<T>...> ctype;
+
+        static bool parse(const jsmntok_t *toks, int tok, const char *str, ctype &value)
+        {
+            return (... || ([&]() {
+                if constexpr(_has_parse<T>::value)
+                {
+                    std::decay_t<jsonstruct_utils::param_type_t<T::parse, 3>> parser_value;
+                    if(T::parse(toks, tok, str, parser_value))
+                    {
+                        value = std::move(parser_value);
+                        return true;
+                    }
+                }
+                return false;
+            })());
+        }
+        
+        template<typename stream>
+        static stream& emit(stream &s, ctype const& value)
+        {
+            std::visit([&s](auto&& arg) {
+
+                (... || ([&s](auto const& arg) {
+                    using TParam = std::decay_t<decltype(arg)>;
+                    using TEmitterParam = std::decay_t<jsonstruct_utils::param_type_t<T::template emit<stream>, 1>>;
+                    if constexpr(_has_emit<T>::value && std::is_same_v<TParam, TEmitterParam>)
+                    {
+                        T::emit(s, arg);
+                        return true;
+                    }
+                    return false;
+                })(arg));
+
+            }, value);
             return s;
         }
     };

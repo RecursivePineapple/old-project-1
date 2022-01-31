@@ -5,7 +5,6 @@
 
 #include "Interface/Server/IConnection.hpp"
 
-#include "Interface/Game/ISession.hpp"
 #include "Interface/Game/INamedEntity.hpp"
 
 namespace gamestate
@@ -16,17 +15,14 @@ namespace gamestate
     {
         virtual ~IPlayer() { }
 
-        virtual ISession* GetSession() = 0;
-        virtual void SetSession(ISession *session) = 0;
+        PROPERTY(IWorld*, World)
+        
+        PROPERTY(SP<server::IConnection>, Connection)
 
-        virtual SP<server::IConnection> GetConnection() = 0;
-        virtual void SetConnection(SPCR<server::IConnection> conn) = 0;
-
-        virtual void SetEntity(SPCR<INamedEntity> entity) = 0;
-        virtual SP<INamedEntity> GetEntity() = 0;
+        PROPERTY(SP<INamedEntity>, Entity)
+        
+        PROPERTY(PlayerAuthInfo, AuthInfo)
 
         virtual bool IsAuthenticated() = 0;
-        virtual CR<PlayerAuthInfo> GetAuthInfo() = 0;
-        virtual void SetAuthInfo(CR<PlayerAuthInfo> info) = 0;
     };
 }

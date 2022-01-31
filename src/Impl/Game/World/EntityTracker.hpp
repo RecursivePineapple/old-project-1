@@ -6,11 +6,14 @@
 #include <map>
 #include <vector>
 #include <unordered_set>
+#include <spdlog/spdlog.h>
 
 #include "Utils/uuid.hpp"
 
 #include "Common/Types.hpp"
-#include "Common/Location.hpp"
+#include "Common/Transform.hpp"
+#include "Common/EntityMessage.hpp"
+#include "Common/Event.hpp"
 
 #include "Interface/Game/INamedEntity.hpp"
 
@@ -62,7 +65,10 @@ namespace gamestate
             while(begin != end)
             {
                 m_entities[begin->GetId()] = *begin;
-                m_entity_list.insert(*begin);
+                if(m_entity_list.insert(*begin).second)
+                {
+                    m_entity_added.Dispatch((*begin).get());
+                }
 
                 ++begin;
             }
@@ -73,7 +79,10 @@ namespace gamestate
             std::unique_lock lock(m_entities_lock);
 
             m_entities[entity->GetId()] = entity;
-            m_entity_list.insert(entity);
+            if(m_entity_list.insert(entity).second)
+            {
+                m_entity_added.Dispatch(entity.get());
+            }
         }
 
         template<typename iter_t>
@@ -84,7 +93,10 @@ namespace gamestate
             while(begin != end)
             {
                 m_entities.erase(begin->GetId());
-                m_entity_list.erase(*begin);
+                if(m_entity_list.erase(*begin) > 0)
+                {
+                    m_entity_removed.Dispatch((*begin).get());
+                }
 
                 ++begin;
             }
@@ -95,192 +107,225 @@ namespace gamestate
             std::unique_lock lock(m_entities_lock);
 
             m_entities.erase(entity->GetId());
-            m_entity_list.erase(entity);
+            if(m_entity_list.erase(entity) > 0)
+            {
+                m_entity_removed.Dispatch(entity.get());
+            }
         }
 
-        void Dispatch(CR<server::Message> msg)
+        void Dispatch(ConnectionContext *sender, CR<gamestate::EntityMessage> msg)
         {
-            uuid dst;
-            if(!msg.EntityId().empty() && uuid::parse(msg.EntityId(), dst))
+            std::shared_lock lock(m_entities_lock);
+
+            auto iter = m_entities.find(msg.dst_id);
+
+            if(iter == m_entities.end())
             {
-                std::shared_lock lock(m_entities_lock);
+                std::stringstream ss;
+                EntityMessage::emit(ss, msg);
+                spdlog::warn("received entity message for invalid entity: {0}", ss.str());
+                return;
+            }
 
-                auto iter = m_entities.find(dst);
-
-                if(iter != m_entities.end())
+            if(!msg.action)
+            {
+                if(msg.transform)
                 {
-                    iter->second->OnMessage(msg);
+                    iter->second->OnUpdatePhysics(msg.transform.value());
+                }
+                else
+                {
+                    std::stringstream ss;
+                    EntityMessage::emit(ss, msg);
+                    spdlog::warn("received action-less entity message with no transform: {0}", ss.str());
+                    return;
                 }
             }
+            else
+            {
+                iter->second->OnMessage(sender, msg);
+            }
+        }
+
+        Event<INamedEntity*> OnEntityAdded()
+        {
+            return m_entity_added;
+        }
+
+        Event<INamedEntity*> OnEntityRemoved()
+        {
+            return m_entity_removed;
         }
 
         std::shared_mutex m_entities_lock;
         std::map<uuid, SP<INamedEntity>> m_entities;
         std::unordered_set<SP<INamedEntity>> m_entity_list;
+
+        Event<INamedEntity*> m_entity_added, m_entity_removed;
     };
 
-    struct EntityGrid
-    {
-        const static long GridSize = 100;
-        typedef std::tuple<long, long, long> GridCoordType;
+    // struct EntityGrid
+    // {
+    //     const static long GridSize = 100;
+    //     typedef std::tuple<long, long, long> GridCoordType;
 
-        void FindEntitiesWithin(CR<Location> center, long radius, std::unordered_set<SP<INamedEntity>> &found)
-        {
-            std::shared_lock lock(m_grid_lock);
+    //     void FindEntitiesWithin(CR<Location> center, long radius, std::unordered_set<SP<INamedEntity>> &found)
+    //     {
+    //         std::shared_lock lock(m_grid_lock);
 
-            radius /= GridSize;
-            double r2 = radius*radius;
+    //         radius /= GridSize;
+    //         double r2 = radius*radius;
 
-            for(long x = 0, x2 = 0; x2 <= r2; ++x, x2=x*x)
-            {
-                for(long y = 0, y2 = 0; (x2+y2) <= r2; ++y, y2=y*y)
-                {
-                    for(long z = 0, z2 = 0; (x2+y2+z2) <= r2; ++z, z2=z*z)
-                    {
-                        auto iter = m_grid.find(std::make_tuple(
-                            x + center.comp.x,
-                            y + center.comp.y,
-                            z + center.comp.z
-                        ));
+    //         for(long x = 0, x2 = 0; x2 <= r2; ++x, x2=x*x)
+    //         {
+    //             for(long y = 0, y2 = 0; (x2+y2) <= r2; ++y, y2=y*y)
+    //             {
+    //                 for(long z = 0, z2 = 0; (x2+y2+z2) <= r2; ++z, z2=z*z)
+    //                 {
+    //                     auto iter = m_grid.find(std::make_tuple(
+    //                         x + center.comp.x,
+    //                         y + center.comp.y,
+    //                         z + center.comp.z
+    //                     ));
 
-                        if(iter != m_grid.end())
-                        {
-                            found.reserve(found.size() + iter->second.size());
+    //                     if(iter != m_grid.end())
+    //                     {
+    //                         found.reserve(found.size() + iter->second.size());
 
-                            found.insert(iter->second.begin(), iter->second.end());
-                        }
-                    }
-                }
-            }
-        }
+    //                         found.insert(iter->second.begin(), iter->second.end());
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        void OnEntityMoved(EntityTracker &tracker, CR<uuid> id, CR<Location> old_loc)
-        {
-            std::shared_lock lock(m_grid_lock);
+    //     void OnEntityMoved(EntityTracker &tracker, CR<uuid> id, CR<Location> old_loc)
+    //     {
+    //         std::shared_lock lock(m_grid_lock);
 
-            auto e = tracker.FindEntity(id);
+    //         auto e = tracker.FindEntity(id);
 
-            if(e == nullptr)
-            {
-                return;
-            }
+    //         if(e == nullptr)
+    //         {
+    //             return;
+    //         }
 
-            if(GridLoc(old_loc) == GridLoc(e))
-            {
-                return;
-            }
+    //         if(GridLoc(old_loc) == GridLoc(e))
+    //         {
+    //             return;
+    //         }
 
-            {
-                std::unique_lock lock2(m_grid_lock);
+    //         {
+    //             std::unique_lock lock2(m_grid_lock);
 
-                auto g_old = m_grid.find(GridLoc(old_loc));
+    //             auto g_old = m_grid.find(GridLoc(old_loc));
 
-                if(g_old != m_grid.end())
-                {
-                    g_old->second.erase(e);
-                }
+    //             if(g_old != m_grid.end())
+    //             {
+    //                 g_old->second.erase(e);
+    //             }
 
-                auto g_new = m_grid.find(GridLoc(e));
+    //             auto g_new = m_grid.find(GridLoc(e));
 
-                if(g_new == m_grid.end())
-                {
-                    m_grid.try_emplace(GridLoc(e), std::unordered_set<SP<INamedEntity>>{e});
-                }
-                else
-                {
-                    g_new->second.insert(e);
-                }
-            }
-        }
+    //             if(g_new == m_grid.end())
+    //             {
+    //                 m_grid.try_emplace(GridLoc(e), std::unordered_set<SP<INamedEntity>>{e});
+    //             }
+    //             else
+    //             {
+    //                 g_new->second.insert(e);
+    //             }
+    //         }
+    //     }
 
-        template<typename iter_t>
-        void Add(iter_t begin, iter_t end)
-        {
-            std::unique_lock lock(m_grid_lock);
+    //     template<typename iter_t>
+    //     void Add(iter_t begin, iter_t end)
+    //     {
+    //         std::unique_lock lock(m_grid_lock);
 
-            while(begin != end)
-            {
-                auto loc = GridLoc(*begin);
-                auto grid = m_grid.find(loc);
+    //         while(begin != end)
+    //         {
+    //             auto loc = GridLoc(*begin);
+    //             auto grid = m_grid.find(loc);
 
-                if(grid != m_grid.end())
-                {
-                    grid->second.insert(*begin);
-                }
-                else
-                {
-                    m_grid.try_emplace(loc, std::unordered_set<SP<INamedEntity>>{
-                        *begin
-                    });
-                }
+    //             if(grid != m_grid.end())
+    //             {
+    //                 grid->second.insert(*begin);
+    //             }
+    //             else
+    //             {
+    //                 m_grid.try_emplace(loc, std::unordered_set<SP<INamedEntity>>{
+    //                     *begin
+    //                 });
+    //             }
 
-                ++begin;
-            }
-        }
+    //             ++begin;
+    //         }
+    //     }
 
-        void Add(SPCR<INamedEntity> entity)
-        {
-            std::unique_lock lock(m_grid_lock);
+    //     void Add(SPCR<INamedEntity> entity)
+    //     {
+    //         std::unique_lock lock(m_grid_lock);
 
-            auto loc = GridLoc(entity);
-            auto grid = m_grid.find(loc);
+    //         auto loc = GridLoc(entity);
+    //         auto grid = m_grid.find(loc);
 
-            if(grid != m_grid.end())
-            {
-                grid->second.insert(entity);
-            }
-            else
-            {
-                m_grid.try_emplace(loc, std::unordered_set<SP<INamedEntity>>{
-                    entity
-                });
-            }
-        }
+    //         if(grid != m_grid.end())
+    //         {
+    //             grid->second.insert(entity);
+    //         }
+    //         else
+    //         {
+    //             m_grid.try_emplace(loc, std::unordered_set<SP<INamedEntity>>{
+    //                 entity
+    //             });
+    //         }
+    //     }
 
-        template<typename iter_t>
-        void Remove(iter_t begin, iter_t end)
-        {
-            std::unique_lock lock(m_grid_lock);
+    //     template<typename iter_t>
+    //     void Remove(iter_t begin, iter_t end)
+    //     {
+    //         std::unique_lock lock(m_grid_lock);
 
-            while(begin != end)
-            {
-                auto grid = m_grid.find(GridLoc(*begin));
+    //         while(begin != end)
+    //         {
+    //             auto grid = m_grid.find(GridLoc(*begin));
 
-                if(grid != m_grid.end())
-                {
-                    grid->second.erase(*begin);
-                }
+    //             if(grid != m_grid.end())
+    //             {
+    //                 grid->second.erase(*begin);
+    //             }
 
-                ++begin;
-            }
-        }
+    //             ++begin;
+    //         }
+    //     }
 
-        void Remove(SPCR<INamedEntity> entity)
-        {
-            std::unique_lock lock(m_grid_lock);
+    //     void Remove(SPCR<INamedEntity> entity)
+    //     {
+    //         std::unique_lock lock(m_grid_lock);
 
-            auto grid = m_grid.find(GridLoc(entity));
+    //         auto grid = m_grid.find(GridLoc(entity));
 
-            if(grid != m_grid.end())
-            {
-                grid->second.erase(entity);
-            }
-        }
+    //         if(grid != m_grid.end())
+    //         {
+    //             grid->second.erase(entity);
+    //         }
+    //     }
 
-        GridCoordType GridLoc(SPCR<INamedEntity> entity)
-        {
-            return GridLoc(entity->GetLocation().m_loc);
-        }
-        GridCoordType GridLoc(CR<Location> loc)
-        {
-            return std::make_tuple<long, long, long>(
-                loc.comp.x / GridSize,
-                loc.comp.y / GridSize,
-                loc.comp.z / GridSize
-            );
-        }
+    //     GridCoordType GridLoc(SPCR<INamedEntity> entity)
+    //     {
+    //         return GridLoc(entity->GetLocation().m_loc);
+    //     }
+    //     GridCoordType GridLoc(CR<Location> loc)
+    //     {
+    //         return std::make_tuple<long, long, long>(
+    //             loc.comp.x / GridSize,
+    //             loc.comp.y / GridSize,
+    //             loc.comp.z / GridSize
+    //         );
+    //     }
 
-        std::shared_mutex m_grid_lock;
-        std::map<GridCoordType, std::unordered_set<SP<INamedEntity>>> m_grid;
-    };
+    //     std::shared_mutex m_grid_lock;
+    //     std::map<GridCoordType, std::unordered_set<SP<INamedEntity>>> m_grid;
+    // };
 }

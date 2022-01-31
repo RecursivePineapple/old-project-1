@@ -4,142 +4,139 @@
 #include <Hypodermic/Container.h>
 
 #include "Utils/dbwrapper/libpq.hpp"
+#include "Utils/queryhelper.hpp"
 
 #include "Common/Types.hpp"
 
+#include "Interface/Component/IUpdateTransmitter.hpp"
+
+#include "Interface/Game/IPlayer.hpp"
 #include "Interface/Game/IWorld.hpp"
 
 #include "Impl/Game/World/EntityTracker.hpp"
 
-#include "HubSession.hpp"
+/* #region Queries */
 
-namespace gamestate
-{
+#define FIND_ALL_ENTITIES_PARAMS(X) X(UUID, world_id)
+
+#define FIND_ALL_ENTITIES_QUERY(param)                                         \
+  pq::table tbl("entity");                                                     \
+  std::string sql = tbl.select(tbl.col("id"))                                  \
+                        .where(tbl.col("world_id") == param(world_id) &&       \
+                               tbl.col("deleted") == false);
+
+#define FIND_ENTITY_PARAMS(X)                                                  \
+  X(UUID, world_id)                                                            \
+  X(UUID, entity_id)
+
+#define FIND_ENTITY_QUERY(param)                                               \
+  pq::table tbl("entity");                                                     \
+  std::string sql =                                                            \
+      tbl.select(tbl.col("x"), tbl.col("y"), tbl.col("z"), tbl.col("type"),    \
+                 pq::functions::coalesce(tbl.col("data"), ""))                 \
+          .where(tbl.col("world_id") == param(world_id) &&                     \
+                 tbl.col("id") == param(entity_id) &&                          \
+                 tbl.col("deleted") == false);
+
+#define ADD_ENTITY_PARAMS(X)                                                   \
+  X(UUID, world_id)                                                            \
+  X(UUID, entity_id)                                                           \
+  X(VARCHAR, type)                                                             \
+  X(VARCHAR, data)                                                             \
+  X(INT4, x)                                                                   \
+  X(INT4, y)                                                                   \
+  X(INT4, z)                                                                   \
+  X(INT4, rx)                                                                  \
+  X(INT4, ry)                                                                  \
+  X(INT4, rz)                                                                  \
+  X(INT4, sx)                                                                  \
+  X(INT4, sy)                                                                  \
+  X(INT4, sz)
+
+#define ADD_ENTITY_QUERY(param)                                                \
+  std::string sql = R"( \
+        INSERT INTO entity (world_id, id, type, data, x, y, z, rx, ry, rz, sx, sy, sz) \
+        VALUES($1::uuid, $2::uuid, $3::varchar, $4::json, \
+            $5::integer, $6::integer, $7::integer, \
+            $8::integer, $9::integer, $10::integer, \
+            $11::integer, $12::integer, $13::integer) \
+    )";
+
+#define SAVE_ENTITY_PARAMS(X)                                                  \
+  X(UUID, world_id)                                                            \
+  X(UUID, entity_id)                                                           \
+  X(VARCHAR, data)                                                             \
+  X(INT4, x)                                                                   \
+  X(INT4, y)                                                                   \
+  X(INT4, z)                                                                   \
+  X(INT4, rx)                                                                  \
+  X(INT4, ry)                                                                  \
+  X(INT4, rz)                                                                  \
+  X(INT4, sx)                                                                  \
+  X(INT4, sy)                                                                  \
+  X(INT4, sz)
+
+#define SAVE_ENTITY_QUERY(param)                                               \
+  std::string sql = R"( \
+        UPDATE entity SET \
+            data = $3::json \
+            x    = $4::integer, \
+            y    = $5::integer, \
+            z    = $6::integer, \
+            rx   = $7::integer, \
+            ry   = $8::integer, \
+            rz   = $9::integer, \
+            sx   = $10::integer, \
+            sy   = $11::integer, \
+            sz   = $12::integer, \
+        WHERE world_id = $1::uuid \
+            AND id = $2::uuid \
+            AND deleted = false \
+    )";
+
+#define DELETE_ENTITY_PARAMS(X)                                                \
+  X(UUID, world_id)                                                            \
+  X(UUID, entity_id)
+
+#define DELETE_ENTITY_QUERY(param)                                             \
+  std::string sql = "UPDATE entity SET deleted = true WHERE world_id = "       \
+                    "$1::uuid AND id = $2::uuid";
+
+#define QUERIES_X(X)                                                           \
+  X(FindAllEntities, FIND_ALL_ENTITIES_PARAMS, FIND_ALL_ENTITIES_QUERY)        \
+  X(FindEntity, FIND_ENTITY_PARAMS, FIND_ENTITY_QUERY)                         \
+  X(AddEntity, ADD_ENTITY_PARAMS, ADD_ENTITY_QUERY)                            \
+  X(SaveEntity, SAVE_ENTITY_PARAMS, SAVE_ENTITY_QUERY)                         \
+  X(DeleteEntity, DELETE_ENTITY_PARAMS, DELETE_ENTITY_QUERY)
+
+/* #endregion */
+
+namespace gamestate {
     namespace pq = dbwrapper::libpq;
+    QUERY_STRUCT_DECL(HubQueries, QUERIES_X)
 
-    namespace queries
-    {
-        using namespace pq;
-
-        using FindAllEntitiesType = SP<pq::prepared_query2<
-            basic_dtype::UUID
-        >>;
-
-        using FindEntityType = SP<pq::prepared_query2<
-            basic_dtype::UUID,
-            basic_dtype::UUID
-        >>;
-
-        using SaveEntityType = SP<pq::prepared_query2<
-            basic_dtype::UUID,
-            basic_dtype::UUID,
-            basic_dtype::INT4,
-            basic_dtype::INT4,
-            basic_dtype::INT4,
-            basic_dtype::VARCHAR
-        >>;
-
-        using DeleteEntityType = SP<pq::prepared_query2<
-            basic_dtype::UUID
-        >>;
-
-        static FindAllEntitiesType FindAllEntities(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::UUID>(R"(
-                SELECT
-                    id
-                FROM entity
-                WHERE world_id = $1::uuid
-                  AND deleted = false
-            )", db->get_prepared_query_name());
-        }
-
-        static FindEntityType FindEntity(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::UUID, basic_dtype::UUID>(R"(
-                SELECT
-                    x, y, z, type, data
-                FROM entity
-                WHERE world_id = $1::uuid
-                  AND id = $2::uuid
-                  AND deleted = false
-            )", db->get_prepared_query_name());
-        }
-
-        static SaveEntityType SaveEntity(SPCR<database> db)
-        {
-            return db->prepare2<
-                    basic_dtype::UUID,
-                    basic_dtype::UUID,
-                    basic_dtype::INT4,
-                    basic_dtype::INT4,
-                    basic_dtype::INT4,
-                    basic_dtype::VARCHAR>(R"(
-                UPDATE entity SET
-                    x = $3::integer,
-                    y = $4::integer,
-                    z = $5::integer,
-                    data = $6::json
-                WHERE world_id = $1::uuid
-                  AND id = $2::uuid
-                  AND deleted = false
-            )", db->get_prepared_query_name());
-        }
-
-        static DeleteEntityType DeleteEntity(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::UUID>(R"(
-                UPDATE entity SET deleted = true WHERE id = $1::uuid
-            )", db->get_prepared_query_name());
-        }
-    }
-
-    struct HubWorld : public IWorld
-    {
+    struct HubWorld : public IWorld {
         HubWorld(
-            SP<Hypodermic::Container> container,
-            SPCR<dbwrapper::libpq::database> db
+            SPCR<Hypodermic::Container> container,
+            SPCR<dbwrapper::libpq::database> db,
+            SPCR<IUpdateTransmitter> transmitter
         ) : m_container(container),
             m_db(db),
-            m_session(container->resolveNamed<ISession>("HubSession"))
-            { }
-        
-        void InitDB()
+            m_transmitter(transmitter)
         {
-            m_find_all_entities = queries::FindAllEntities(m_db);
-            m_find_entity = queries::FindEntity(m_db);
-            m_save_entity = queries::SaveEntity(m_db);
-            m_delete_entity = queries::DeleteEntity(m_db);
+            m_tracker.OnEntityAdded().Bind<&HubWorld::OnEntityAdded>(this);
+            m_tracker.OnEntityRemoved().Bind<&HubWorld::OnEntityRemoved>(this);
         }
+
+        void InitDB() { m_queries = HubQueries(m_db); }
 
         virtual std::string WorldType() override { return "HubWorld"; }
 
-        virtual EntityLockResult TryLockEntitiesWithin(CR<Location>, long, ISession* locker) override
-        {
-            if(locker != m_session.get())
-            {
-                return EntityLockResult({m_session.get()}, {}, {});
-            }
-
-            std::map<uuid, SP<INamedEntity>> entities;
-            std::unordered_set<uuid> ids;
-
-            for(auto const& e : m_tracker.m_entity_list)
-            {
-                entities[e->GetId()] = e;
-                ids.insert(e->GetId());
-            }
-
-            return EntityLockResult({}, std::move(entities), std::move(ids));
-        }
-
         virtual SP<INamedEntity> FindEntity(CR<uuid> id) override
         {
-            std::shared_lock lock(m_entity_mutex);
-
             auto e = m_tracker.FindEntity(id);
 
-            if(e != nullptr)
+            if (e != nullptr)
             {
                 return e;
             }
@@ -147,27 +144,18 @@ namespace gamestate
             return LoadEntity(id);
         }
 
-        virtual SP<INamedEntity> Spawn(
-            CR<std::string> type,
-            CR<INamedEntity::LocationType> loc,
-            ISession* locker = nullptr) override
+        virtual SP<INamedEntity> Spawn(CR<std::string> type, CR<INamedEntity::TransformType> loc) override
         {
             SP<INamedEntity> e = m_container->resolveNamed<INamedEntity>(type);
+            e->SetId(uuid::generate());
 
-            std::unique_lock lock(m_entity_mutex);
+            e->SetLocation(INamedEntity::TransformType(this, loc.m_transform.m_loc));
 
-            m_tracker.Add(e);
-
-            INamedEntity::LocationType l(loc);
-            l.m_world = this;
-            e->SetLocation(l);
-            
-            if(locker != nullptr)
+            if(e->IsActive())
             {
-                e->TryLock(locker);
+                AddEntity(e);
+                e->BeginPlay();
             }
-
-            e->BeginPlay();
 
             return e;
         }
@@ -177,56 +165,64 @@ namespace gamestate
             entity->EndPlay();
 
             std::unique_lock lock(m_entity_mutex);
-
             m_tracker.Remove(entity);
         }
 
         virtual void Destroy(SPCR<INamedEntity> entity) override
         {
-            entity->EndPlay();
-
-            std::unique_lock lock(m_entity_mutex);
-
-            m_delete_entity->exec(entity->GetId());
-
-            m_tracker.Remove(entity);
+            Remove(entity);
+            m_queries.DeleteEntity(GetId(), entity->GetId());
         }
 
-        virtual void Dispatch(CR<server::Message> msg) override
+        virtual void AddPlayer(SPCR<IPlayer> player) override
+        {
+            {
+                std::unique_lock lock(m_player_mutex);
+                m_players[player->GetEntity()->GetId()] = player;
+            }
+
+            {
+                std::shared_lock lock(m_entity_mutex);
+                for(auto const& e : m_tracker.m_entity_list)
+                {
+                    m_transmitter->SendCreate(this, player, e);
+                }
+            }
+        }
+
+        virtual void RemovePlayer(SPCR<IPlayer> player) override
+        {
+            std::unique_lock lock(m_player_mutex);
+
+            m_players.erase(player->GetEntity()->GetId());
+        }
+
+        virtual void Dispatch(ConnectionContext *sender, CR<gamestate::EntityMessage> msg) override
         {
             std::shared_lock lock(m_entity_mutex);
 
-            m_tracker.Dispatch(msg);
-        }
-        
-        virtual void OnEntityMoved(CR<uuid>, CR<Location>) override { }
-
-        virtual ISession* FindSessionAt(CR<Location>) override
-        {
-            return m_session.get();
+            m_tracker.Dispatch(sender, msg);
         }
 
         virtual void Load() override
         {
             std::unique_lock lock(m_entity_mutex);
 
-            auto e = m_find_all_entities->exec(m_world_id);
+            auto e = m_queries.FindAllEntities(GetId());
 
-            for(int i = 0; i < e.ntuples(); ++i)
+            for (int i = 0; i < e.ntuples(); ++i)
             {
                 auto id = e.cell(i, 0).as<uuid>().value();
 
                 LoadEntity(uuid(id.value));
             }
-
-            dynamic_cast<IHubSession*>(m_session.get())->SetLockedEntities(m_tracker.m_entity_list);
         }
 
         virtual void Save() override
         {
             std::shared_lock lock(m_entity_mutex);
 
-            for(auto const& e : m_tracker.m_entity_list)
+            for (auto const &e : m_tracker.m_entity_list)
             {
                 SaveEntity(e);
             }
@@ -239,81 +235,141 @@ namespace gamestate
 
         SP<INamedEntity> LoadEntity(CR<uuid> id)
         {
-            auto res = m_find_entity->exec(m_world_id, id.value);
+            auto res = m_queries.FindEntity(GetId(), id.value);
 
-            if(res.ntuples() != 1)
+            if (res.ntuples() != 1)
             {
                 return nullptr;
             }
 
-            int x = res.cell(0, 0).as_int().value();
-            int y = res.cell(0, 1).as_int().value();
-            int z = res.cell(0, 2).as_int().value();
+            auto t = pq::to_nonoptional_tuple<int, int, int, std::string, std::string>(res, 0);
 
-            std::string type = res.cell(0, 3).as_string().value();
-            auto data = res.cell(0, 4).as_string();
+            if (!t)
+            {
+                return nullptr;
+            }
+
+            auto [x, y, z, type, data] = t.value();
 
             SP<INamedEntity> e = m_container->resolveNamed<INamedEntity>(type);
 
-            if(e == nullptr)
+            if (e == nullptr)
             {
                 return nullptr;
             }
 
             e->SetId(id);
-            e->SetLocation(INamedEntity::LocationType(this, x, y, z));
+            e->SetLocation(INamedEntity::TransformType(this, x, y, z));
+            e->LoadState(data);
 
-            if(data)
+            if(e->IsActive())
             {
-                e->LoadState(data.value());
+                {
+                    std::unique_lock lock(m_entity_mutex);
+                    m_tracker.Add(e);
+                }
+
+                e->BeginPlay();
             }
-
-            m_tracker.Add(e);
-
-            e->BeginPlay();
 
             return e;
         }
 
+        void AddEntity(SPCR<INamedEntity> e)
+        {
+            {
+                std::unique_lock lock(m_entity_mutex);
+                m_tracker.Add(e);
+            }
+
+            if(!e->ShouldSave()) { return; }
+
+            auto t = e->GetLocation().m_transform;
+
+            m_queries.AddEntity(
+                GetId(), e->GetId(),
+                e->EntityType(),
+                e->SaveState(),
+                t.m_loc.x, t.m_loc.y, t.m_loc.z,
+                t.m_rot.x, t.m_rot.y, t.m_rot.z,
+                t.m_scale.x, t.m_scale.y, t.m_scale.z);
+        }
+
         void SaveEntity(SPCR<INamedEntity> e)
         {
-            auto l = e->GetLocation().m_loc;
+            if(!e->ShouldSave()) { return; }
 
-            m_save_entity->exec(
-                m_world_id, e->GetId(),
-                l.comp.x, l.comp.y, l.comp.z,
-                e->SaveState()
-            );
+            auto t = e->GetLocation().m_transform;
+
+            m_queries.SaveEntity(
+                GetId(), e->GetId(),
+                e->SaveState(),
+                t.m_loc.x, t.m_loc.y, t.m_loc.z,
+                t.m_rot.x, t.m_rot.y, t.m_rot.z,
+                t.m_scale.x, t.m_scale.y, t.m_scale.z);
+        }
+
+        void OnEntityAdded(INamedEntity *entity)
+        {
+            entity->OnStateChanged().Bind<&HubWorld::OnEntityStateChanged>(this);
+            entity->OnMove().Bind<&HubWorld::OnEntityMoved>(this);
+
+            std::shared_lock lock(m_player_mutex);
+
+            for(auto const& player : m_players)
+            {
+                m_transmitter->SendCreate(this, player.second, entity);
+            }
+        }
+
+        void OnEntityRemoved(INamedEntity *entity)
+        {
+            std::shared_lock lock(m_player_mutex);
+
+            for(auto const& player : m_players)
+            {
+                m_transmitter->SendDestroy(this, player.second, entity);
+            }
+        }
+
+        void OnEntityStateChanged(INamedEntity *entity)
+        {
+            std::shared_lock lock(m_player_mutex);
+
+            for(auto const& player : m_players)
+            {
+                m_transmitter->SendUpdate(this, player.second, entity);
+            }
+        }
+
+        void OnEntityMoved(INamedEntity *entity)
+        {
+            std::shared_lock lock(m_player_mutex);
+
+            for(auto const& player : m_players)
+            {
+                m_transmitter->SendUpdatePhysics(this, player.second, entity);
+            }
         }
 
         SP<Hypodermic::Container> m_container;
         SP<dbwrapper::libpq::database> m_db;
+        HubQueries m_queries;
+        SP<IUpdateTransmitter> m_transmitter;
 
-        queries::FindAllEntitiesType m_find_all_entities;
-        queries::FindEntityType m_find_entity;
-        queries::SaveEntityType m_save_entity;
-        queries::DeleteEntityType m_delete_entity;
-
-        std::shared_mutex m_entity_mutex;
-        uuid m_world_id;
+        std::shared_mutex m_entity_mutex, m_player_mutex;
         EntityTracker m_tracker;
-        SP<ISession> m_session;
+        std::map<uuid, SP<IPlayer>> m_players;
     };
 }
 
 #include <Hypodermic/ContainerBuilder.h>
 
-namespace configure
-{
+namespace configure {
     void ConfigureHubWorld(Hypodermic::ContainerBuilder &container);
-    void ConfigureHubWorld(Hypodermic::ContainerBuilder &container)
-    {
-        container
-            .registerType<gamestate::HubWorld>()
+    void ConfigureHubWorld(Hypodermic::ContainerBuilder &container) {
+        container.registerType<gamestate::HubWorld>()
             .named<gamestate::IWorld>("HubWorld")
-            .onActivated([](auto, auto inst)
-            {
-                inst->InitDB();
-            });
+            .onActivated([](auto, auto inst) { inst->InitDB(); });
     }
 }

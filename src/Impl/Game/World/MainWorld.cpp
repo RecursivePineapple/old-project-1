@@ -108,83 +108,9 @@ namespace gamestate
         
         virtual std::string WorldType() override { return "MainWorld"; }
 
-        virtual EntityLockResult TryLockEntitiesWithin(CR<Location> loc, long size, ISession *locker) override
-        {
-            std::unordered_set<SP<INamedEntity>> entities;
-            std::vector<SP<INamedEntity>> success;
-            std::unordered_set<uuid> found_ids;
-            std::unordered_set<ISession*> conflicts;
-
-            m_grid.FindEntitiesWithin(loc, size, entities);
-
-            success.reserve(entities.size());
-            found_ids.reserve(entities.size());
-            for(auto const& e : entities)
-            {
-                auto l = e->TryLock(locker);
-                if(l != locker)
-                {
-                    conflicts.insert(l);
-                }
-                else
-                {
-                    success.push_back(e);
-                    found_ids.insert(e->GetId());
-                }
-            }
-
-            auto res = m_find_entities->exec(loc.comp.x, loc.comp.y, loc.comp.z, size);
-            
-            if(res.status() != ExecStatusType::PGRES_TUPLES_OK)
-            {
-                throw std::runtime_error("error executing FindEntitiesWithin query: " + res.error_message());
-            }
-
-            std::unordered_set<uuid> db_ids;
-            db_ids.reserve(res.ntuples());
-
-            for(int i = 0; i < res.ntuples(); ++i)
-            {
-                if(res.cell(i, 0).is<uuid>())
-                {
-                    db_ids.emplace(res.cell(i, 0).as<uuid>());
-                }
-            }
-
-            std::vector<uuid> new_ids;
-
-            std::set_difference(found_ids.begin(), found_ids.end(), db_ids.begin(), db_ids.end(), new_ids.begin());
-
-            for(auto const& new_id : new_ids)
-            {
-                auto e = LoadEntity(new_id);
-
-                if(e != nullptr)
-                {
-                    auto l = e->TryLock(locker);
-                    if(l != locker)
-                    {
-                        conflicts.insert(l);
-                    }
-                    else
-                    {
-                        success.push_back(e);
-                        found_ids.insert(e->GetId());
-                    }
-                }
-            }
-
-            return EntityLockResult(
-                std::move(std::vector<ISession*>(conflicts.begin(), conflicts.end())),
-                std::move(success),
-                std::move(found_ids)
-            );
-        }
-
         virtual SP<INamedEntity> Spawn(
             CR<std::string> type,
-            CR<INamedEntity::LocationType> loc,
-            ISession* locker = nullptr) override
+            CR<INamedEntity::LocationType> loc) override
         { 
             SP<INamedEntity> e = m_container->resolveNamed<INamedEntity>(type);
 
@@ -195,11 +121,6 @@ namespace gamestate
             l.m_world = this;
             e->SetLocation(l);
             
-            if(locker != nullptr)
-            {
-                e->TryLock(locker);
-            }
-
             e->BeginPlay();
 
             return e;

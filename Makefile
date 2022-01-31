@@ -31,29 +31,34 @@ endif
 
 PKGS	   += openssl libpq
 
-LIBS	   += -Lbin -l:libusockets.a -lz -luuid -lpthread
+LIBS	   += -Lbin -lz -luuid -lusockets
 INCLS	   += -Isrc -I/usr/include/postgresql/14/server
 
 INCLS      +=  $(shell pkg-config --cflags $(PKGS))
 LIBS       +=  $(shell pkg-config --libs $(PKGS))
 
 PBCPPFLAGS += -fPIC
-CPPFLAGS   += -fPIC -std=c++17 -fdiagnostics-color -flto
-CFLAGS	   += -fPIC -fdiagnostics-color -flto
-LDFLAGS    += -shared -fdiagnostics-color -flto -fuse-ld=llvm-link-11
+CPPFLAGS   += -fPIC -std=c++17
+CFLAGS	   += -fPIC
+LDFLAGS    += -pthread -fuse-ld=mold
+DEFINES    += -DPROTOBUF_INLINE_NOT_IN_HEADERS=0 -DBOOST_ALL_DYN_LINK
+
+CPPFLAGS   += $(DEFINES)
+CFLAGS     += $(DEFINES)
 
 CWARNINGS  += -pedantic -Wall -Wextra -Wcast-align -Wcast-qual \
 		-Wdisabled-optimization -Wformat=2 -Winit-self -Wlogical-op \
 		-Wmissing-declarations -Wmissing-include-dirs \
 		-Wredundant-decls -Wshadow -Wsign-conversion -Werror \
 		-Wstrict-overflow=5 -Wswitch-default -Wundef -Wno-unused \
-		-Wuninitialized -Wno-error=strict-overflow -Wno-unknown-pragmas \
-		-DPROTOBUF_INLINE_NOT_IN_HEADERS=0
+		-Wuninitialized -Wno-error=strict-overflow -Wno-unknown-pragmas
 
 CPPFLAGS   += $(CWARNINGS) -Wctor-dtor-privacy -Wnoexcept -Wold-style-cast \
 		-Woverloaded-virtual -Wsign-promo -Wstrict-null-sentinel
 
 CFLAGS     += $(CWARNINGS)
+
+SANITIZERS += 
 
 ifeq "$(MAKECMDGOALS)" "test"
 DEBUG      ?= 1
@@ -78,9 +83,9 @@ CC         := clang-11
 CXX        := clang++-11
 endif
 
-CPPFLAGS   += $(INCLS)
-CFLAGS     += $(INCLS)
-LDFLAGS   += -Wl,--as-needed $(LIBS)
+CPPFLAGS   += $(SANITIZERS) $(INCLS)
+CFLAGS     += $(SANITIZERS) $(INCLS)
+LDFLAGS    += $(SANITIZERS) -Wl,--as-needed $(LIBS)
 
 ##############
 
@@ -102,7 +107,7 @@ SRCS = \
 
 SRV_OBJS   = $(patsubst src/%,obj/%.o,$(SRV_SRCS))
 SRP_OBJS   = $(patsubst src/%,obj/%.o,$(SRP_SRCS))
-GCHS       = $(patsubst src/%,src/%.gch,$(shell grep -l -E "^\#pragma precompile-gch" $(HEADERS)))
+PCHS       = $(patsubst src/%,src/%.pch,$(shell grep -l -E "^\#pragma precompile-pch" $(HEADERS)))
 DEPS       = $(patsubst src/%,dep/%.d,$(SRCS))
 
 ##############
@@ -111,11 +116,11 @@ DEPS       = $(patsubst src/%,dep/%.d,$(SRCS))
 .PRECIOUS: $(OBJS) $(PBGENS)
 
 all:
-	@$(MAKE) -s deps gchs
+	@$(MAKE) -s deps pchs
 	@$(MAKE) -s bins
 
 clean:
-	- $(RM) $(BINS) $(DEPS) $(SRV_OBJS) $(SRP_OBJS) $(PBGENS) $(GCHS)
+	- $(RM) $(BINS) $(DEPS) $(SRV_OBJS) $(SRP_OBJS) $(PBGENS) $(PCHS)
 
 run: bin/server
 	-PRIVATE_KEY=server.key PUBLIC_KEY=server.crt bin/server
@@ -124,18 +129,17 @@ bins: $(BINS)
 
 deps: $(DEPS)
 
-gchs: $(GCHS)
+pchs: $(PCHS)
 
 bin/server: $(SRV_OBJS)
 	@mkdir -p $(shell dirname $@)
 	@echo "  [LD] $@"
-	echo $(CXX) -o $@ $^ $(LDFLAGS)
-	@llvm-link-11 -o $@ $^ $(patsubst -l%,%,$(LIBS))
+	@$(CXX) -o $@ $^ $(LDFLAGS)
 
 bin/scratchpad: $(SRP_OBJS)
-	mkdir -p $(shell dirname $@)
+	@mkdir -p $(shell dirname $@)
 	@echo "  [LD] $@"
-	$(CXX) -o $@ $^ $(LDFLAGS)
+	@$(CXX) -o $@ $^ $(LDFLAGS)
 
 dep/%.cpp.d: src/%.cpp
 	@mkdir -p $(shell dirname $@)
@@ -157,9 +161,9 @@ dep/%.c.d: src/%.c
 	@echo " [DEP] $<"
 	@$(CC) $(CFLAGS) -MG -MM $< -MQ $(patsubst src/%,obj/%.o,$<) -MF $@
 
-src/%.gch: src/%
+src/%.pch: src/%
 	@mkdir -p $(shell dirname $@)
-	@echo " [GCH] $<"
+	@echo " [PCH] $<"
 	@$(CXX) $(CPPFLAGS) $< -o $@
 
 obj/%.cpp.o: src/%.cpp

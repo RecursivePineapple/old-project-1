@@ -13,12 +13,14 @@ create table entity (
 	
 	data json,
 
-	deleted boolean,
+	deleted boolean default false,
 	
-	primary key(world_id, id)
+	primary key(id)
 
-) partition by hash (world_id);
+);
 
-create index on entity(world_id, x, y, z);
+create index on entity(world_id);
 
-create index on entity(id);
+create index on entity(x, y, z);
+
+create unique index on entity(id);

@@ -1,11 +1,8 @@
 
 #include <thread>
-
-#include <uWebSockets/App.h>
-
 #include <spdlog/spdlog.h>
-
-#include "Common/Hypodermic.hpp"
+#include <uWebSockets/App.h>
+#include <Hypodermic/ContainerBuilder.h>
 
 #include "Interface/Server/IServer.hpp"
 
@@ -45,6 +42,8 @@ int main(int argc, const char **argv)
     (void)argc;
     (void)argv;
 
+    spdlog::set_level(spdlog::level::trace);
+
     Hypodermic::Logger::configureLogLevel(Hypodermic::LogLevels::Debug);
     Hypodermic::Logger::configureSink(std::make_shared<LoggerSink>());
 
@@ -58,15 +57,18 @@ int main(int argc, const char **argv)
 
     for(size_t i = 0; i < std::thread::hardware_concurrency(); ++i)
     {
-        threads.emplace_back([&]()
+        threads.emplace_back([&container, i]()
         {
             uWS::App()
-                .ws<server::ConnectionContext>("/*", container->resolve<server::IServer>()->Behavior())
-                .listen(9001, [](auto *listen_socket) {
-                    if (listen_socket) {
-                        std::cout << "Thread " << std::this_thread::get_id() << " listening on port " << 9001 << std::endl;
-                    } else {
-                        std::cout << "Thread " << std::this_thread::get_id() << " failed to listen on port 9001" << std::endl;
+                .ws<ConnectionContext>("/*", container->resolve<server::IServer>()->Behavior())
+                .listen(9001, [i](auto *listen_socket) {
+                    if(listen_socket != nullptr)
+                    {
+                        spdlog::info("thread {0} listening on port {1}", i, 9001);
+                    }
+                    else
+                    {
+                        spdlog::error("thread {0} could not listen on port {1}", i, 9001);
                     }
                 })
                 .run();

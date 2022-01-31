@@ -5,12 +5,31 @@
 #include <spdlog/spdlog.h>
 
 #include "Utils/dbwrapper/libpq.hpp"
+#include "Utils/queryhelper.hpp"
 
 #include "Common/Types.hpp"
 #include "Common/PlayerAuthInfo.hpp"
 
 #include "Interface/Subsystem/IPlayerSubsystem.hpp"
 #include "Interface/Component/IWorldTracker.hpp"
+
+/* #region Queries */
+
+#define FIND_PLAYER_PARAMS(X) X(VARCHAR, username)
+
+#define FIND_PLAYER_QUERY(param) \
+    pq::table tbl("player"); \
+    std::string sql = tbl.select( \
+        tbl.col("secret"), tbl.col("world_id"), tbl.col("entity_id") \
+    ).where( \
+        tbl.col("username") == param(username) && \
+        tbl.col("deleted") == false \
+    );
+
+#define QUERIES_X(X) \
+  X(FindPlayer, FIND_PLAYER_PARAMS, FIND_PLAYER_QUERY)
+
+/* #endregion */
 
 namespace server
 {
@@ -21,24 +40,7 @@ namespace server
     DECLARE_JSON_STRUCT(PlayerAuthMsg, PLAYER_AUTH_FIELDS)
 
     namespace pq = dbwrapper::libpq;
-
-    namespace queries
-    {
-        using namespace pq;
-
-        using FindPlayerType = SP<pq::prepared_query2<basic_dtype::VARCHAR>>;
-
-        static FindPlayerType FindPlayer(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::VARCHAR>(R"(
-                SELECT
-                    secret, world_id, entity_id
-                FROM player
-                WHERE username = $1::varchar
-                  AND deleted = false
-            )", db->get_prepared_query_name());
-        }
-    }
+    QUERY_STRUCT_DECL(PlayerQueries, QUERIES_X)
 
     struct PlayerSubsystem : public IPlayerSubsystem
     {
@@ -51,10 +53,7 @@ namespace server
             m_db(db)
             { }
         
-        void InitDB()
-        {
-            m_find_player = queries::FindPlayer(m_db);
-        }
+        void InitDB() { m_queries = PlayerQueries(m_db); }
 
         virtual SP<gamestate::IPlayer> CreateUnathenticated() override
         {
@@ -68,7 +67,7 @@ namespace server
 
         virtual void OnMessage(CR<server::Message> msg) override
         {
-            if(msg.Type() == "auth")
+            if(msg.Action() == "auth")
             {
                 PlayerAuthMsg auth;
 
@@ -82,7 +81,7 @@ namespace server
                     return;
                 }
 
-                auto res = m_find_player->exec(auth.username);
+                auto res = m_queries.FindPlayer(auth.username);
 
                 if(res.ntuples() != 1)
                 {
@@ -133,14 +132,13 @@ namespace server
             auto e = world->FindEntity(player->GetAuthInfo().entity_id);
             player->SetEntity(e);
 
-            world->FindSessionAt(e->GetLocation().m_loc)->AddPlayer(player);
         }
 
     private:
         SP<Hypodermic::Container> m_container;
         SP<gamestate::IWorldTracker> m_world_tracker;
         SP<pq::database> m_db;
-        queries::FindPlayerType m_find_player;
+        PlayerQueries m_queries;
     };
 }
 
@@ -157,9 +155,6 @@ namespace configure
             .as<server::IPlayerSubsystem>()
             .as<server::ISubsystem>()
             .singleInstance()
-            .onActivated([](auto, auto inst)
-            {
-                inst->InitDB();
-            });
+            .onActivated([](auto, auto inst) { inst->InitDB(); });
     }
 }

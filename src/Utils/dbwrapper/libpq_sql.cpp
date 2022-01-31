@@ -34,6 +34,18 @@ std::string to_sql_value(const dtype& d)
     return d.m_type;
 }
 
+std::string to_sql_value(const function& f)
+{
+    std::stringstream ss;
+    ss << f.m_function << "(";
+
+    stream_join(ss, ", ", f.m_params);
+
+    ss << ")";
+
+    return ss.str();
+}
+
 std::string to_sql_value(const param& p)
 {
     return "$" + std::to_string(p.m_id) + p.m_dtype;
@@ -51,6 +63,11 @@ std::string to_sql_value_ref(const column& col)
         s << col.m_table << "." << col.m_name;
     }
     return s.str();
+}
+
+std::string to_sql_value_ref(const function& f)
+{
+    return f.m_alias.value_or("");
 }
 
 std::string to_sql_value(const literal &l)
@@ -86,13 +103,7 @@ std::string to_sql(const query& q)
 {
     std::stringstream s;
 
-    s << "SELECT ";
-
-    stream_join_map(s, ", ", q.m_cols, [](const column& c) {
-        return to_sql_value(c);
-    });
-
-    s << " " << "FROM " << q.m_table << " ";
+    s << "SELECT " << q.m_cols << " " << "FROM " << q.m_table << " ";
 
     for(const auto& join : q.m_joins)
     {
@@ -136,6 +147,11 @@ std::string to_sql(const query& q)
     return s.str();
 }
 
+std::string to_preparable_sql(const query& q)
+{
+    return to_sql(q);
+}
+
 std::string to_sql_table_from(const query& q)
 {
     std::stringstream s;
@@ -164,6 +180,35 @@ std::string to_sql_table_ref(const query& q)
 
         return s.str();
     }
+}
+
+std::string to_sql(const update_table& u)
+{
+    std::stringstream s;
+
+    s << "UPDATE SET ";
+
+    stream_join_map(s, ", ", u.m_updates, [](const auto& pair) {
+        const auto [ col, value ] = pair;
+        return col + " = " + value;
+    });
+
+    if(u.m_constraint)
+    {
+        s << "WHERE " << u.m_constraint.value() << " ";
+    }
+
+    if(u.m_returning)
+    {
+        s << "RETURNING " << u.m_returning.value();
+    }
+
+    return s.str();
+}
+
+std::string to_preparable_sql(const update_table& u)
+{
+    return to_sql(u);
 }
 
 std::string to_sql(const join& j)

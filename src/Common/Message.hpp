@@ -10,16 +10,35 @@
 
 #include "Utils/jsonstruct.hpp"
 #include "Utils/jsonparser.hpp"
+#include "Utils/jsonuuid.hpp"
 
 #include "Common/ConnectionContext.hpp"
 
 namespace server
 {
+    enum MessageType
+    {
+        MESSAGE_TYPE_UNKNOWN = 0,
+        MESSAGE_TYPE_SUBSYSTEM_ACTION,
+        MESSAGE_TYPE_ENTITY_ACTION,
+        MESSAGE_TYPE_ENTITY_UPDATE
+    };
+
+    #define MESSAGE_FIELDS(X) \
+        X(int, jsontypes::integer, type) \
+        X(std::string, jsontypes::string, action) \
+        X(std::optional<std::string>, jsontypes::string, target) \
+        X(std::optional<uuid>, jsontypes::uuid, eid) \
+        X(std::optional<jsontypes::span_t>, jsontypes::span, transform) \
+        X(std::optional<jsontypes::span_t>, jsontypes::span, state) \
+        X(std::optional<jsontypes::span_t>, jsontypes::span, data)
+
+    DECLARE_JSON_STRUCT(Message, MESSAGE_FIELDS)
 
     struct Message
     {
-        virtual CR<std::string> Type() const = 0;
-        virtual CR<std::string> EntityId() const = 0;
+        virtual CR<std::string> Action() const = 0;
+        virtual CR<std::string> DestId() const = 0;
 
         virtual CR<std::vector<jsmntok_t>> Tokens() const = 0;
 
@@ -41,16 +60,10 @@ namespace server
             return T::parse(Tokens().data(), TokenIdx(), Text().data(), value);
         }
 
-        template<typename T>
-        bool GetValue(CR<std::string> key, typename T::ctype &value) const
+        template<typename T, typename ctype>
+        bool GetValue(CR<std::string> key, ctype &value) const
         {
-            return server::ParseValue<T>(Tokens(), TokenIdx(), Text().data(), key, value);
-        }
-
-        template<typename T>
-        bool GetValue(CR<std::string> key, T &value) const
-        {
-            return server::ParseValue(Tokens(), TokenIdx(), Text().data(), key, value);
+            return server::ParseValue<T, ctype>(Tokens(), TokenIdx(), Text().data(), key, value);
         }
     };
 
@@ -58,21 +71,22 @@ namespace server
     {
         template<typename t1, typename t2, typename t3>
         NetworkMessage(
-            t1 &&type, t2 &&eid,
+            t1 &&action, t2 &&dst_id,
             CR<std::vector<jsmntok_t>> tokens, int token_idx,
             t3 &&text,
-            ConnectionContext* sender)
-        : m_type(std::move(type)),
-            m_eid(std::move(eid)),
+            ConnectionContext* sender
+        ) : m_action(std::move(action)),
+            m_dst_id(std::move(dst_id)),
             m_tokens(tokens),
             m_token_idx(token_idx),
             m_text(std::move(text)),
-            m_sender(sender) { }
+            m_sender(sender)
+            { }
 
         virtual ~NetworkMessage() { }
 
-        virtual CR<std::string> Type() const override { return m_type; }
-        virtual CR<std::string> EntityId() const override { return m_eid; }
+        virtual CR<std::string> Action() const override { return m_action; }
+        virtual CR<std::string> DestId() const override { return m_dst_id; }
 
         virtual CR<std::vector<jsmntok_t>> Tokens() const override { return m_tokens; }
 
@@ -82,8 +96,8 @@ namespace server
 
         virtual ConnectionContext* Sender() const override { return m_sender; }
 
-        std::string m_type;
-        std::string m_eid;
+        std::string m_action;
+        std::string m_dst_id;
         CR<std::vector<jsmntok_t>> m_tokens;
         int m_token_idx;
         std::string m_text;
@@ -92,14 +106,15 @@ namespace server
 
     struct StringMessage : Message
     {
+        typedef StringMessage ctype;
         StringMessage(CR<std::string> text) : m_text(text) { }
         StringMessage(std::string&& text) : m_text(text) { }
 
         virtual ~StringMessage() { }
 
-        virtual CR<std::string> Type() const override { LoadTokens(); return m_type; }
+        virtual CR<std::string> Action() const override { LoadTokens(); return m_action; }
 
-        virtual CR<std::string> EntityId() const override { LoadTokens(); return m_eid; }
+        virtual CR<std::string> DestId() const override { LoadTokens(); return m_dst_id; }
 
         virtual CR<std::vector<jsmntok_t>> Tokens() const override { LoadTokens();  return m_tokens; }
 
@@ -118,8 +133,8 @@ namespace server
                     throw std::runtime_error("Attempted to parse invalid json in StringMessage: '" + m_text + "'");
                 }
                 
-                ParseValue<jsontypes::string>(Tokens(), 0, m_text, "type", m_type);
-                ParseValue<jsontypes::string>(Tokens(), 0, m_text, "eid", m_eid);
+                ParseValue<jsontypes::string>(Tokens(), 0, m_text, "action", m_action);
+                ParseValue<jsontypes::string>(Tokens(), 0, m_text, "dst_id", m_dst_id);
 
                 m_tokens_loaded = true;
             }
@@ -129,7 +144,7 @@ namespace server
 
         mutable bool m_tokens_loaded;
         mutable std::vector<jsmntok_t> m_tokens;
-        mutable std::string m_type, m_eid;
+        mutable std::string m_action, m_dst_id;
 
         template<typename T>
         static StringMessage FromValue(CR<typename T::ctype> value)
@@ -156,6 +171,12 @@ namespace server
             typedef jsontypes::object<jsontypes::string, jsontypes::string> object;
             
             return server::StringMessage::FromValue<object>(obj);
+        }
+
+        template<typename stream>
+        static stream& emit(stream &s, CR<StringMessage>)
+        {
+            return s;
         }
     };
 

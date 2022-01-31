@@ -6,49 +6,44 @@
 #include <Hypodermic/Container.h>
 
 #include "Utils/dbwrapper/libpq.hpp"
+#include "Utils/queryhelper.hpp"
 
 #include "Common/Types.hpp"
 
 #include "Interface/Game/IWorld.hpp"
 #include "Interface/Component/IWorldTracker.hpp"
 
+#define FIND_WORLD_PARAMS(X) \
+    X(UUID, world_id)
+
+#define FIND_WORLD_QUERY(param) \
+    pq::table tbl("world"); \
+    std::string sql = tbl.select( \
+        tbl.col("type") \
+    ) \
+    .where( \
+        tbl.col("world_id") == param(world_id) && \
+        tbl.col("deleted") == false \
+    );
+
+#define ADD_WORLD_PARAMS(X) \
+    X(UUID, world_id) \
+    X(VARCHAR, type)
+
+#define ADD_WORLD_QUERY(param) \
+    pq::table tbl("world"); \
+    std::string sql = "INSERT INTO world (world_id, type) VALUES ($1::uuid, $2::varchar);";
+
+#define QUERIES_X(X) \
+    X(FindWorld, FIND_WORLD_PARAMS, FIND_WORLD_QUERY) \
+    X(AddWorld, ADD_WORLD_PARAMS, ADD_WORLD_QUERY)
+
 namespace gamestate
 {
     namespace pq = dbwrapper::libpq;
-    using dt = pq::basic_dtype;
 
-    namespace queries
-    {
-        using namespace pq;
-
-        using FindWorldType = SP<pq::prepared_query2<
-            basic_dtype::UUID
-        >>;
-
-        using AddWorldType = SP<pq::prepared_query2<
-            basic_dtype::UUID,
-            basic_dtype::VARCHAR
-        >>;
-
-        static FindWorldType FindWorld(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::UUID>(R"(
-                SELECT
-                    type
-                FROM world
-                WHERE world_id = $1::uuid
-                  AND deleted = false
-            )", "FindWorld");
-        }
-
-        static AddWorldType AddWorld(SPCR<database> db)
-        {
-            return db->prepare2<basic_dtype::UUID, basic_dtype::VARCHAR>(R"(
-                INSERT INTO world (id, type) VALUES ($1::uuid, $2::varchar);
-            )", "AddWorld");
-        }
-    }
-
+    QUERY_STRUCT_DECL(TrackerQuery, QUERIES_X)
+ 
     struct WorldTracker : public IWorldTracker
     {
         WorldTracker(
@@ -58,13 +53,7 @@ namespace gamestate
             m_db(db)
             { }
 
-        void InitDB()
-        {
-            m_find_world = queries::FindWorld(m_db);
-            m_add_world = queries::AddWorld(m_db);
-        }
-
-        virtual IWorld* FindWorld(CR<uuid> id) override
+        virtual IWorld* FindLoadedWorld(CR<uuid> id) override
         {
             std::lock_guard lock(m_world_mutex);
 
@@ -74,8 +63,21 @@ namespace gamestate
             {
                 return iter->second.get();
             }
+            else
+            {
+                return nullptr;
+            }
+        }
 
-            auto res = m_find_world->exec(id);
+        virtual IWorld* FindWorld(CR<uuid> id) override
+        {
+            std::lock_guard lock(m_world_mutex);
+
+            IWorld *loaded = FindLoadedWorld(id);
+
+            if(loaded) { return loaded; }
+
+            auto res = m_q.FindWorld(id);
 
             if(res.ntuples() == 1)
             {
@@ -102,10 +104,14 @@ namespace gamestate
             SP<IWorld> world = m_container->resolveNamed<IWorld>(type);
             world->SetId(uuid::generate());
 
-            auto res = m_add_world->exec(world->GetId(), world->WorldType());
+            auto res = m_q.AddWorld(world->GetId(), world->WorldType());
 
             world->Generate();
-            world->Save();
+
+            if(!world->IsTransient())
+            {
+                world->Save();
+            }
 
             {
                 std::lock_guard lock(m_world_mutex);
@@ -116,11 +122,11 @@ namespace gamestate
             return world.get();
         }
     
+        void InitDB() { m_q = TrackerQuery(m_db); }
+        
         SP<Hypodermic::Container> m_container;
         SP<pq::database> m_db;
-
-        queries::FindWorldType m_find_world;
-        queries::AddWorldType m_add_world;
+        TrackerQuery m_q;
 
         std::mutex m_world_mutex;
         std::map<uuid, SP<IWorld>> m_worlds;
@@ -138,9 +144,6 @@ namespace configure
             .registerType<gamestate::WorldTracker>()
             .as<gamestate::IWorldTracker>()
             .singleInstance()
-            .onActivated([](auto, auto inst)
-            {
-                inst->InitDB();
-            });
+            .onActivated([](auto, auto inst) { inst->InitDB(); });
     }
 }

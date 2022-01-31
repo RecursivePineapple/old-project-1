@@ -15,6 +15,18 @@
 
 namespace gamestate
 {
+    namespace messages
+    {
+        #define CREATE_ENTITY_FIELDS(X) \
+            X(std::string, jsontypes::string, type) \
+            X(uuid, jsontypes::uuid, world_id) \
+            X(int, jsontypes::integer, x) \
+            X(int, jsontypes::integer, y) \
+            X(int, jsontypes::integer, z)
+        
+        DECLARE_JSON_STRUCT(CreateEntity, CREATE_ENTITY_FIELDS)
+    }
+
     struct DebugSubsystem : public IDebugSubsystem
     {
         DebugSubsystem(
@@ -24,7 +36,7 @@ namespace gamestate
 
         virtual void OnMessage(CR<server::Message> msg) override
         {
-            if(msg.Type() == "create-hub")
+            if(msg.Action() == "create-hub")
             {
                 IWorld *world = m_world_tracker->CreateHubWorld();
 
@@ -33,35 +45,32 @@ namespace gamestate
                     {"world-id", world->GetId().to_string()},
                 });
             }
-            else if(msg.Type() == "create-entity")
+            else if(msg.Action() == "create-entity")
             {
-                EntityMessage em;
+                messages::CreateEntity create;
 
-                msg.ParseInto(em);
-
-                std::string type;
-                if(!msg.GetValue<jsontypes::string>("type", type))
+                if(!msg.ParseInto(create))
                 {
                     msg.Sender()->m_player->GetConnection()->SendObject({
                         {"status", "error"},
-                        {"message", "invalid entity type"}
+                        {"message", "invalid message format"}
                     });
                     return;
                 }
 
-                uuid world_id;
-                if(!msg.GetValue<jsontypes::uuid>("world-id", world_id))
+                IWorld *world = m_world_tracker->FindWorld(create.world_id);
+                spdlog::info("world id: {0}", create.world_id.to_string());
+
+                if(world == nullptr)
                 {
                     msg.Sender()->m_player->GetConnection()->SendObject({
                         {"status", "error"},
-                        {"message", "invalid world id"}
+                        {"message", "could not find world"}
                     });
                     return;
                 }
 
-                IWorld *world = m_world_tracker->FindWorld(world_id);
-
-                auto e = world->Spawn(type, INamedEntity::LocationType(world, Location(em.x, em.y, em.z)));
+                auto e = world->Spawn(create.type, INamedEntity::TransformType(world, Location(create.x, create.y, create.z)));
 
                 if(e != nullptr)
                 {

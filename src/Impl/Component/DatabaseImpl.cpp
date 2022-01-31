@@ -1,7 +1,8 @@
 
 #pragma target server
 
-#include "Common/Hypodermic.hpp"
+#include <Hypodermic/ContainerBuilder.h>
+
 #include "Common/Types.hpp"
 
 #include "Utils/dbwrapper/libpq.hpp"

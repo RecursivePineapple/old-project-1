@@ -8,13 +8,9 @@ namespace configure
     void ConfigureHubWorld(Hypodermic::ContainerBuilder &container);
     void ConfigureMainWorld(Hypodermic::ContainerBuilder &container);
 
-    void ConfigureHubSession(Hypodermic::ContainerBuilder &container);
-
     void ConfigureWorlds(Hypodermic::ContainerBuilder &container)
     {
         ConfigureHubWorld(container);
         // ConfigureMainWorld(container);
-        
-        ConfigureHubSession(container);
     }
 }
