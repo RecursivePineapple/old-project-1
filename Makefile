@@ -8,12 +8,15 @@ C_SRCS = \
 
 SRV_SRCS = \
 	src/main.cpp \
-	$(shell grep -l -E "^\#pragma target server" $(C_SRCS))
+	$(shell grep -l -E "^\#pragma target server$$" $(C_SRCS))
+
+SRV_TEST_SRCS = \
+	$(shell grep -l -E "^\#pragma target server-test$$" $(C_SRCS))
 
 SRV_DBG_SRCS = \
 	src/Utils/profiler.cpp \
 	src/Utils/base64.cpp \
-	$(shell grep -l -E "^\#pragma target server-debug" $(C_SRCS))
+	$(shell grep -l -E "^\#pragma target server-debug$$" $(C_SRCS))
 
 SRP_SRCS = \
 	src/scratchpad.cpp \
@@ -29,7 +32,7 @@ endif
 
 ##############
 
-PKGS	   += openssl libpq
+PKGS	   += openssl libpq librabbitmq
 
 LIBS	   += -Lbin -lz -luuid -lusockets
 INCLS	   += -Isrc -I/usr/include/postgresql/14/server
@@ -68,9 +71,9 @@ DEBUG      ?= 1
 endif
 
 ifeq "$(DEBUG)" "1"
-CPPFLAGS   += -DDEBUG -g -O0
-CFLAGS     += -DDEBUG -g -O0
-LDFLAGS    += -Wl,--export-dynamic
+CPPFLAGS   += -DDEBUG -g -O0 -fprofile-arcs -ftest-coverage
+CFLAGS     += -DDEBUG -g -O0 -fprofile-arcs -ftest-coverage
+LDFLAGS    += -Wl,--export-dynamic --coverage
 else
 CPPFLAGS   += -O3
 CFLAGS     += -O3
@@ -105,25 +108,52 @@ SRCS = \
 	$(shell find src -type f -name '*.hpp') \
 	$(PBGENS)
 
-SRV_OBJS   = $(patsubst src/%,obj/%.o,$(SRV_SRCS))
-SRP_OBJS   = $(patsubst src/%,obj/%.o,$(SRP_SRCS))
-PCHS       = $(patsubst src/%,src/%.pch,$(shell grep -l -E "^\#pragma precompile-pch" $(HEADERS)))
-DEPS       = $(patsubst src/%,dep/%.d,$(SRCS))
+SRV_OBJS      = $(patsubst src/%,obj/%.o,$(SRV_SRCS))
+SRP_OBJS      = $(patsubst src/%,obj/%.o,$(SRP_SRCS))
+SRV_TEST_OBJS = $(patsubst src/%,obj/%.o,$(SRV_TEST_SRCS))
+PCHS          = $(patsubst src/%,src/%.pch,$(shell grep -l -E "^\#pragma precompile-pch" $(HEADERS)))
+DEPS          = $(patsubst src/%,dep/%.d,$(SRCS))
 
 ##############
 
-.PHONY: all clean run
+.PHONY: all clean run run-tests watch-tests gen-report watch-server watch-docker-server
 .PRECIOUS: $(OBJS) $(PBGENS)
 
 all:
-	@$(MAKE) -s deps pchs
-	@$(MAKE) -s bins
+	@$(MAKE) -s -j16 deps pchs
+	@$(MAKE) -s -j16 bins
 
 clean:
-	- $(RM) $(BINS) $(DEPS) $(SRV_OBJS) $(SRP_OBJS) $(PBGENS) $(PCHS)
+	- $(RM) -r bin obj dep coverage $(PBGENS) $(PCHS)
 
 run: bin/server
-	-PRIVATE_KEY=server.key PUBLIC_KEY=server.crt bin/server
+	-bin/server
+
+run-tests: bin/server-test
+	@find obj -name "*.gcda" -exec rm {} \;
+	@find obj -name "*.gcdo" -exec rm {} \;
+	@echo " [RUN] bin/server-test"
+	@bin/server-test
+
+watch-tests:
+	@tput reset
+	@while true; do inotifywait -e modify,create,delete -r src >/dev/null 2>/dev/null && tput reset && $(MAKE) run-tests gen-report; done
+
+watch-server:
+	@tput reset
+	@while true; do inotifywait -e modify,create,delete -r src >/dev/null 2>/dev/null && tput reset && $(MAKE) -j16 bin/server; done
+
+watch-docker-server:
+	@tput reset
+	@while true; do inotifywait -e modify,create,delete -r src >/dev/null 2>/dev/null && tput reset && $(MAKE) -j16 bin/server && docker cp bin/server magegame_server_1:/opt/server/bin/ && docker restart magegame_server_1; done
+
+coverage/lcov.info: bin/server-test $(shell find obj -name "*.gcd*" -type f)
+	@mkdir -p coverage
+	@lcov --directory . --base-directory . --gcov-tool misc/gcov.sh --capture -o coverage/lcov_raw.info >/dev/null
+	@lcov --remove coverage/lcov_raw.info -o coverage/lcov.info '/usr/*' 'c++/*' 'cppunit/*' '*/src/Utils/jsmn.hpp' >/dev/null
+
+gen-report: coverage/lcov.info
+	@genhtml $^ --demangle-cpp --output-directory coverage/report
 
 bins: $(BINS)
 
@@ -140,6 +170,11 @@ bin/scratchpad: $(SRP_OBJS)
 	@mkdir -p $(shell dirname $@)
 	@echo "  [LD] $@"
 	@$(CXX) -o $@ $^ $(LDFLAGS)
+
+bin/server-test: $(SRV_TEST_OBJS)
+	@mkdir -p $(shell dirname $@)
+	@echo "  [LD] $@"
+	@$(CXX) -o $@ $^ $(LDFLAGS) -lcppunit
 
 dep/%.cpp.d: src/%.cpp
 	@mkdir -p $(shell dirname $@)

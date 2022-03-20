@@ -197,7 +197,7 @@ namespace gamestate {
             m_players.erase(player->GetEntity()->GetId());
         }
 
-        virtual void Dispatch(ConnectionContext *sender, CR<gamestate::EntityMessage> msg) override
+        virtual void Dispatch(ConnectionContext *sender, CR<server::Message> msg) override
         {
             std::shared_lock lock(m_entity_mutex);
 
@@ -258,9 +258,16 @@ namespace gamestate {
                 return nullptr;
             }
 
+            auto state = jsontypes::span_t::FromString(data);
+
+            if(!state)
+            {
+                return nullptr;
+            }
+
             e->SetId(id);
             e->SetLocation(INamedEntity::TransformType(this, x, y, z));
-            e->LoadState(data);
+            e->LoadState(state.value());
 
             if(e->IsActive())
             {

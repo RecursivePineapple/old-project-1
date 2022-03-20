@@ -17,37 +17,10 @@ namespace server
     {
         Connection(IServer::SocketType *ws) : m_socket(ws) { }
 
-        virtual void Send(const Message *msg) override
+        virtual void SendUnsafe(CR<std::string> msg) override
         {
-            m_socket->send(msg->Text(), uWS::OpCode::TEXT);
-            spdlog::debug("[{0}] sending: {1}", m_socket->getRemoteAddressAsText(), msg->Text());
-        }
-
-        virtual void SendBulk(const Message *data, size_t n) override
-        {
-            std::stringstream ss;
-
-            ss << "[";
-
-            for(size_t i = 0; i < n; ++i)
-            {
-                switch(i)
-                {
-                    default:
-                        ss << ",";
-                        goto zero;
-                        break;
-                    case 0:
-                        zero:
-                        ss << data[i].Text();
-                        break;
-                }
-            }
-
-            ss << "]";
-
-            m_socket->send(ss.str(), uWS::OpCode::TEXT);
-            spdlog::debug("[{0}] sending: {1}", m_socket->getRemoteAddressAsText(), ss.str());
+            m_socket->send(msg, uWS::OpCode::TEXT);
+            spdlog::debug("[{0}] sending: {1}", m_socket->getRemoteAddressAsText(), msg);
         }
 
     private:
@@ -96,21 +69,29 @@ namespace server
     private:
         void OnOpen(SocketType *ws) noexcept
         {
-            spdlog::debug("received connection from: {0}", ws->getRemoteAddressAsText());
-            ws->getUserData()->m_player = m_player_subsystem->CreateUnathenticated();
-            ws->getUserData()->m_player->SetConnection(std::make_shared<Connection>(ws));
+            auto data = ws->getUserData();
+
+            data->m_remote_address = ws->getRemoteAddressAsText();
+            spdlog::debug("received connection from: {0}", data->m_remote_address);
+            
+            data->m_player = m_player_subsystem->CreateUnathenticated();
+            data->m_player->SetConnection(std::make_shared<Connection>(ws));
         }
 
         void OnMessage(SocketType *ws, CR<std::string_view> message, uWS::OpCode) noexcept
         {
-            spdlog::debug("[{0}] received message: {1}", ws->getRemoteAddressAsText(), message);
-            m_dispatcher->Dispatch(ws->getUserData(), message);
+            auto data = ws->getUserData();
+
+            spdlog::debug("[{0}] received message: {1}", data->m_remote_address, message);
+            m_dispatcher->Dispatch(data, message);
         }
 
         void OnClose(SocketType *ws, int, CR<std::string_view>) noexcept
         {
-            spdlog::debug("closing connection to: {0}", ws->getRemoteAddressAsText());
-            m_player_subsystem->Disconnect(ws->getUserData()->m_player);
+            auto data = ws->getUserData();
+
+            spdlog::debug("closing connection to: {0}", data->m_remote_address);
+            m_player_subsystem->Disconnect(data->m_player);
         }
 
         SP<IDispatcher> m_dispatcher;

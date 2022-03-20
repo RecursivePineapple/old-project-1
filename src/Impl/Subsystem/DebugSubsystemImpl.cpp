@@ -11,7 +11,7 @@
 
 #include "Interface/Game/IPlayer.hpp"
 
-#include "Common/EntityMessage.hpp"
+#include "Common/Message.hpp"
 
 namespace gamestate
 {
@@ -34,27 +34,34 @@ namespace gamestate
         ) : m_world_tracker(world_tracker)
             { }
 
-        virtual void OnMessage(CR<server::Message> msg) override
+        virtual void OnMessage(ConnectionContext *sender, CR<server::Message> msg) override
         {
-            if(msg.Action() == "create-hub")
+            if(msg.action == "create-hub")
             {
                 IWorld *world = m_world_tracker->CreateHubWorld();
 
-                msg.Sender()->m_player->GetConnection()->SendObject({
-                    {"status", "success"},
-                    {"world-id", world->GetId().to_string()},
-                });
+                sender->m_player->GetConnection()->Send(
+                    server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
+                    .data({
+                        {"world-id", world->GetId()}
+                    })
+                    .build()
+                );
             }
-            else if(msg.Action() == "create-entity")
+            else if(msg.action == "create-entity")
             {
                 messages::CreateEntity create;
 
-                if(!msg.ParseInto(create))
+                if(!msg.data || !msg.data->ParseInto<messages::CreateEntity>(create))
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"},
-                        {"message", "invalid message format"}
-                    });
+                    sender->m_player->GetConnection()->Send(
+                        server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
+                        .data({
+                            {"status", "error"},
+                            {"message", "invalid message format"}
+                        })
+                        .build()
+                    );
                     return;
                 }
 
@@ -63,27 +70,39 @@ namespace gamestate
 
                 if(world == nullptr)
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"},
+                    sender->m_player->GetConnection()->Send(
+                        server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
+                        .data({
+                            {"status", "error"},
                         {"message", "could not find world"}
-                    });
+                        })
+                        .build()
+                    );
                     return;
                 }
 
-                auto e = world->Spawn(create.type, INamedEntity::TransformType(world, Location(create.x, create.y, create.z)));
+                auto e = world->Spawn(create.type, INamedEntity::TransformType(world, create.x, create.y, create.z));
 
                 if(e != nullptr)
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "success"},
-                        {"eid", e->GetId().to_string()}
-                    });
+                    sender->m_player->GetConnection()->Send(
+                        server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
+                        .data({
+                            {"status", "success"},
+                            {"eid", e->GetId().to_string()}
+                        })
+                        .build()
+                    );
                 }
                 else
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"}
-                    });
+                    sender->m_player->GetConnection()->Send(
+                        server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
+                        .data({
+                            {"status", "error"}
+                        })
+                        .build()
+                    );
                 }
             }
         }

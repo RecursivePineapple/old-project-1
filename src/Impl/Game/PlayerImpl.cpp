@@ -20,7 +20,7 @@ namespace gamestate
 
         virtual bool IsAuthenticated() override
         {
-            return m_auth_info.is_authenticated;
+            return m_auth_info.m_is_authenticated;
         }
 
     };

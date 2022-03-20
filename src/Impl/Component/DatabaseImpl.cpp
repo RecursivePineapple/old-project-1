@@ -6,6 +6,7 @@
 #include "Common/Types.hpp"
 
 #include "Utils/dbwrapper/libpq.hpp"
+#include "Utils/env.hpp"
 
 namespace configure
 {
@@ -14,8 +15,9 @@ namespace configure
     static pq::connection_info GetConnectionInfo()
     {
         return pq::connection_info(
-            "postgres",
-            "rootpassword"
+            utils::getenv("PG_USER", "postgres"),
+            utils::getenv("PG_PWD", "rootpassword"),
+            utils::getenv("PG_HOST", "localhost")
         );
     }
 

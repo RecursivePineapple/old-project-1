@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "Common/EntityMessage.hpp"
+#include "Common/Message.hpp"
 
 #include "Interface/Game/INamedEntity.hpp"
 #include "Interface/Game/IWorld.hpp"
@@ -18,15 +18,9 @@ namespace gamestate
     {
         using StateType = TState;
 
-        virtual bool LoadState(CR<std::string> msg) override
+        virtual bool LoadState(CR<jsontypes::span_t> msg) override
         {
-            std::vector<jsmntok_t> toks;
-            if(!server::ParseJson(toks, msg))
-            {
-                return false;
-            }
-
-            if(!TState::parse(toks.data(), 0, msg.data(), m_state))
+            if(!msg.ParseInto<TState>(m_state))
             {
                 return false;
             }
@@ -50,12 +44,6 @@ namespace gamestate
         {
             auto old_loc = m_transform.m_transform.m_loc;
             m_transform = transform;
-            m_move_evt.Dispatch(this);
-        }
-        virtual void OnUpdatePhysics(CR<Transform> transform) override
-        {
-            auto old_loc = m_transform.m_transform.m_loc;
-            m_transform.m_transform = transform;
             m_move_evt.Dispatch(this);
         }
 

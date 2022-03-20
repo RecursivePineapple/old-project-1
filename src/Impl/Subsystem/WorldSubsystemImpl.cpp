@@ -6,15 +6,10 @@
 #include "Interface/Subsystem/IWorldSubsystem.hpp"
 #include "Interface/Game/IWorld.hpp"
 #include "Interface/Component/IWorldTracker.hpp"
+#include "Interface/Game/IPlayer.hpp"
 
 namespace gamestate
 {
-    #define WORLD_MESSAGE_FIELDS(X) \
-        X(uuid, jsontypes::uuid, dst_id) \
-        X(gamestate::EntityMessage, gamestate::EntityMessage, entity)
-
-    DECLARE_JSON_STRUCT(WorldMessage, WORLD_MESSAGE_FIELDS)
-
     struct WorldSubsystem : public IWorldSubsystem
     {
         WorldSubsystem(
@@ -25,25 +20,33 @@ namespace gamestate
             bWantsEntityMessages = true;
         }
 
-        virtual void OnMessage(CR<server::Message> msg) override
+        virtual void OnMessage(ConnectionContext *sender, CR<server::Message> msg) override
         {
-            WorldMessage wmsg;
-
-            if(!msg.ParseInto(wmsg))
+            if(!sender->m_player->IsAuthenticated())
             {
-                spdlog::warn("received invalid world message: {0}", msg.Text());
+                spdlog::warn("unathenticated player tried to send entity message (ip={0}, msg={1})",
+                    sender->m_remote_address,
+                    msg.to_string());
                 return;
             }
 
-            IWorld *world = m_tracker->FindLoadedWorld(wmsg.dst_id);
+            if(!msg.world_id)
+            {
+                spdlog::warn("received invalid world message (pid={0}, msg={1})",
+                    sender->m_player->GetEntity()->GetId().to_string(),
+                    msg.to_string()); // TODO
+                return;
+            }
+
+            IWorld *world = m_tracker->FindLoadedWorld(msg.world_id.value());
 
             if(world == nullptr)
             {
-                spdlog::warn("received world message for an unloaded or invalid world: {0}", msg.Text());
+                spdlog::warn("received world message for an unloaded or invalid world: {0}", "");
                 return;
             }
 
-            world->Dispatch(msg.Sender(), wmsg.entity);
+            world->Dispatch(sender, msg);
         }
     
         SP<IWorldTracker> m_tracker;

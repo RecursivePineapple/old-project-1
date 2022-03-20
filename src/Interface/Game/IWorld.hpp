@@ -9,7 +9,7 @@
 #include "Common/Types.hpp"
 #include "Common/Transform.hpp"
 #include "Common/Message.hpp"
-#include "Common/EntityMessage.hpp"
+#include "Common/ConnectionContext.hpp"
 
 #include "Interface/Game/INamedEntity.hpp"
 
@@ -31,7 +31,7 @@ namespace gamestate
         virtual void AddPlayer(SPCR<IPlayer> player) = 0;
         virtual void RemovePlayer(SPCR<IPlayer> player) = 0;
         
-        virtual void Dispatch(ConnectionContext *sender, CR<gamestate::EntityMessage> msg) = 0;
+        virtual void Dispatch(ConnectionContext *sender, CR<server::Message> msg) = 0;
 
         virtual void Load() = 0;
         virtual void Save() = 0;

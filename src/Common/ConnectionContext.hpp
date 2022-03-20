@@ -13,4 +13,6 @@ namespace gamestate
 struct ConnectionContext
 {
     SP<gamestate::IPlayer> m_player;
+
+    std::string m_remote_address;
 };

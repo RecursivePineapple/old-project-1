@@ -8,23 +8,25 @@
 
 namespace gamestate
 {
-    #define TEST_RESP_FIELDS(X) \
-        X(std::string, jsontypes::string, foo)
+    #define TEST_STATE_FIELDS(X) \
+        X(int, jsontypes::integer, data)
 
-    DECLARE_JSON_STRUCT(TestResp, TEST_RESP_FIELDS)
+    DECLARE_JSON_STRUCT(TestState, TEST_STATE_FIELDS)
 
-    struct TestEntity : public IBasicNamedEntity<>
+    struct TestEntity : public IBasicNamedEntity<TestState>
     {
         virtual std::string EntityType() override { return "TestEntity"; }
 
-        virtual void OnMessage(ConnectionContext *sender, CR<gamestate::EntityMessage> msg) override
+        virtual void OnMessage(ConnectionContext *sender, CR<std::string> action, std::optional<jsontypes::span_t> data) override
         {
-            if(msg.action == "ping")
-            {
-                TestResp resp;
-                resp.foo = "pong";
+            (void)sender;
+            (void)data;
 
-                sender->m_player->GetConnection()->Send(server::StringMessage::FromValue(resp));
+            if(action == "ping")
+            {
+                auto state = this->m_state;
+                state.data++;
+                this->SetState(state);
             }
         }
     };

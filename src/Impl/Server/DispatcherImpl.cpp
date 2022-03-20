@@ -46,7 +46,7 @@ namespace server
         {
             std::vector<jsmntok_t> tok_buffer;
 
-            if(!ParseJson(tok_buffer, msg_text))
+            if(!jsontypes::ParseJson(tok_buffer, msg_text))
             {
                 return false;
             }
@@ -62,7 +62,7 @@ namespace server
 
                 for(auto const& span : data)
                 {
-                    if(!dispatch(sender, msg_text, tok_buffer, span.start)) { return false; }
+                    if(!dispatch(sender, span.str, span.toks, 0)) { return false; }
                 }
 
                 return true;
@@ -74,37 +74,39 @@ namespace server
         }
 
     private:
-        bool dispatch(ConnectionContext *sender, std::string_view const& msg_text, std::vector<jsmntok_t> &tok_buffer, int tok_idx)
+        bool dispatch(ConnectionContext *sender, CR<std::string_view> msg_text, CR<std::vector<jsmntok_t>> tok_buffer, int tok_idx)
         {
-            action_message msg;
-            if(!action_message::parse(tok_buffer.data(), tok_idx, msg_text.data(), msg))
+            server::Message msg;
+            if(!Message::parse(tok_buffer.data(), tok_idx, msg_text.data(), msg))
             {
                 return false;
             }
 
-            NetworkMessage m(
-                std::move(msg.action),
-                std::move(msg.dst_id),
-                tok_buffer,
-                tok_idx,
-                msg_text,
-                sender
-            );
+            switch(msg.type)
+            {
+                case server::MESSAGE_TYPE_SUBSYSTEM_ACTION: {
+                    spdlog::debug("dispatching subsystem message");
+                    for(auto const& subsystem : m_sub_subsystems)
+                    {
+                        subsystem->OnMessage(sender, msg);
+                    }
 
-            if(m.DestId().empty())
-            {
-                spdlog::debug("dispatching subsystem message");
-                for(auto const& subsystem : m_sub_subsystems)
-                {
-                    subsystem->OnMessage(m);
+                    break;
                 }
-            }
-            else
-            {
-                spdlog::debug("dispatching entity message");
-                for(auto const& subsystem : m_entity_subsystems)
-                {
-                    subsystem->OnMessage(m);
+
+                case server::MESSAGE_TYPE_ENTITY_ACTION: {
+                    spdlog::debug("dispatching entity message");
+                    for(auto const& subsystem : m_entity_subsystems)
+                    {
+                        subsystem->OnMessage(sender, msg);
+                    }
+
+                    break;
+                }
+
+                default: {
+                    spdlog::debug("received invalid message type: {0}", msg.type);
+                    break;
                 }
             }
 

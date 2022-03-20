@@ -65,18 +65,21 @@ namespace server
 
         }
 
-        virtual void OnMessage(CR<server::Message> msg) override
+        virtual void OnMessage(ConnectionContext *sender, CR<server::Message> msg) override
         {
-            if(msg.Action() == "auth")
+            if(msg.action == "set-auth-token")
             {
                 PlayerAuthMsg auth;
 
-                if(!msg.ParseInto(auth) || auth.username.empty())
+                auto player = sender->m_player;
+                auto conn = player->GetConnection();
+
+                if(!msg.data || !msg.data->ParseInto<PlayerAuthMsg>(auth) || auth.username.empty())
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"},
+                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
                         {"message", "invalid message format"}
-                    });
+                    }).build());
+
                     spdlog::debug("player auth message handled but not valid");
                     return;
                 }
@@ -85,51 +88,53 @@ namespace server
 
                 if(res.ntuples() != 1)
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"},
-                        {"message", "invalid username or secret"}
-                    });
+                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
+                        {"message", "invalid token"}
+                    }).build());
+
                     spdlog::debug("auth attempt for user {0} had invalid username", auth.username);
                     return;
                 }
 
-                auto [secret, world_id, entity_id] = pq::to_tuple<std::string, uuid, uuid>(res, 0);
+                auto tpl = pq::to_nonoptional_tuple<std::string, uuid, uuid>(res, 0);
+
+                if(!tpl)
+                {
+                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
+                        {"message", "invalid username or secret"}
+                    }).build());
+                    spdlog::debug("auth attempt for user {0} had invalid username", auth.username);
+                    return;
+                }
+
+                auto [secret, world_id, entity_id] = tpl.value();
 
                 if(secret != auth.secret)
                 {
-                    msg.Sender()->m_player->GetConnection()->SendObject({
-                        {"status", "error"},
+                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
                         {"message", "invalid username or secret"}
-                    });
+                    }).build());
                     spdlog::debug("auth attempt for user {0} had invalid secret", auth.username);
                     return;
                 }
 
-                gamestate::PlayerAuthInfo authinfo;
-                authinfo.is_authenticated = true;
-                authinfo.username = auth.username;
-                authinfo.world_id = uuid(world_id.value().value);
-                authinfo.entity_id = uuid(entity_id.value().value);
+                player->SetAuthInfo(gamestate::PlayerAuthInfo(auth.username, world_id, entity_id));
 
-                msg.Sender()->m_player->SetAuthInfo(authinfo);
-
-                msg.Sender()->m_player->GetConnection()->SendObject({
-                    {"status", "success"}
-                });
+                conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("accept-auth").build());
                 spdlog::debug("player authenticated as {0} with world_id {1} and entity_id {2}",
-                    authinfo.username,
-                    authinfo.world_id.to_string(),
-                    authinfo.entity_id.to_string());
+                    auth.username,
+                    world_id.to_string(),
+                    entity_id.to_string());
 
-                OnPlayerLoggedIn(msg.Sender()->m_player);
+                OnPlayerLoggedIn(player);
             }
         }
 
         void OnPlayerLoggedIn(SPCR<gamestate::IPlayer> player)
         {
-            gamestate::IWorld *world = m_world_tracker->FindWorld(player->GetAuthInfo().world_id);
+            gamestate::IWorld *world = m_world_tracker->FindWorld(player->GetAuthInfo().m_world_id);
 
-            auto e = world->FindEntity(player->GetAuthInfo().entity_id);
+            auto e = world->FindEntity(player->GetAuthInfo().m_entity_id);
             player->SetEntity(e);
 
         }

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <vector>
 #include <map>
 #include <algorithm>
@@ -131,6 +132,11 @@ namespace jsonstruct_utils
             s << "}"; \
             return s; \
         } \
+        std::string to_string() const { \
+            std::stringstream ss; \
+            name::emit(ss, *this); \
+            return ss.str(); \
+        } \
     private: \
         FIELDNO_ALGO(X_FIELDS) \
     public:
@@ -170,7 +176,6 @@ namespace fastconvert
             exp *= 10;
         }
 
-        asm("");
         return value * sign;
     }
 
@@ -286,54 +291,47 @@ namespace fastconvert
 
 namespace jsontypes
 {
-    template<typename T>
-    struct null_t
+    template<typename string_like = std::string_view>
+    static bool ParseJson(std::vector<jsmntok_t> &tok_buffer, string_like const& text, bool shrink = true)
     {
-        T value;
-        bool is_null;
+        tok_buffer.resize(32);
 
-        constexpr null_t(std::nullptr_t) : value(), is_null(true) { }
-        constexpr null_t(T const& p_value): value(p_value), is_null(false) { }
-        constexpr null_t(T && p_value): value(std::move(p_value)), is_null(false) { }
+        jsmn_parser parser;
+        jsmn_init(&parser);
 
-        constexpr operator bool() { return is_null; }
+        retry:
 
-        constexpr operator T&() { return value; }
+        int nread = jsmn_parse(&parser, text.data(), text.size(), tok_buffer.data(), tok_buffer.size());
 
-        constexpr T& operator*() { return value; }
-    };
-    
-    struct span_t
-    {
-        const jsmntok_t *toks;
-        int start, end; // end is inclusive
-        const char *str;
-
-        template<typename T>
-        bool ParseInto(T &value)
+        switch(nread)
         {
-            return T::parse(toks, start, str, value);
+            case JSMN_ERROR_NOMEM:
+                tok_buffer.resize(tok_buffer.size() * 2);
+                goto retry;
+
+            case JSMN_ERROR_INVAL:
+            case JSMN_ERROR_PART:
+                return false;
+            
+            default:
+                break;
         }
 
-        std::string Text()
+        if(shrink)
         {
-            return std::string(str, static_cast<size_t>(end - start + 1));
+            tok_buffer.resize(static_cast<size_t>(nread));
         }
-    };
 
-    #define IMPLEMENT_PARSER(name, type) static bool name ## _parse(const jsmntok_t *toks, int tok, const char *str, type &value)
-    #define IMPLEMENT_EMITTER(name, type) template<typename stream> static stream& name ## _emit(stream &s, type const&value)
+        return true;
+    }
 
-    #define TOK_TEXT (std::string_view(&str[toks[tok].start], static_cast<size_t>(toks[tok].end - toks[tok].start)))
+    template<typename TParser, typename T = typename TParser::ctype, typename string_like = std::string_view>
+    static bool ParseJson(string_like const& text, T &value)
+    {
+        std::vector<jsmntok_t> toks;
 
-    #define TOK_CHAR (str[toks[tok].start])
-
-    #define TOK_TYPE (toks[tok].type)
-
-    #define TOK_ASSERT_TYPE(type) if(TOK_TYPE != type) return false
-
-    template<typename T>
-    using ctype_t = typename T::ctype;
+        return ParseJson(toks, text) && TParser::parse(toks.data(), 0, text.data(), value);
+    }
 
     static inline int next_token(const jsmntok_t *toks, int tok)
     {
@@ -362,6 +360,115 @@ namespace jsontypes
             }
         }
     }
+
+    template<typename T>
+    struct null_t
+    {
+        T value;
+        bool is_null;
+
+        constexpr null_t() : value(), is_null(true) { }
+        constexpr null_t(std::nullptr_t) : value(), is_null(true) { }
+        constexpr null_t(T const& p_value): value(p_value), is_null(false) { }
+        constexpr null_t(T && p_value): value(std::move(p_value)), is_null(false) { }
+
+        constexpr operator bool() { return is_null; }
+
+        constexpr operator T&() { return value; }
+
+        constexpr T& operator*() { return value; }
+
+        auto operator=(std::nullptr_t)
+        {
+            value = T();
+            is_null = true;
+            return *this;
+        }
+
+        auto operator=(const T& t)
+        {
+            value = t;
+            is_null = false;
+            return *this;
+        }
+
+        bool operator==(std::nullptr_t)
+        {
+            return is_null;
+        }
+
+        bool operator==(const T& t)
+        {
+            if(is_null) return false;
+
+            return value == t;
+        }
+    };
+    
+    struct span_t
+    {
+        std::vector<jsmntok_t> toks;
+        std::string str;
+
+        span_t() { }
+
+        span_t(const jsmntok_t *toks, int tok, const char *str) {
+            int next = next_token(toks, tok);
+            
+            this->str.assign(&str[toks[tok].start], &str[toks[next - 1].end+1]);
+
+            ParseJson(this->toks, this->str);
+        }
+
+        template<typename TParser, typename T = typename TParser::ctype>
+        bool ParseInto(T &value) const
+        {
+            return TParser::parse(toks.data(), 0, str.data(), value);
+        }
+
+        template<typename TEmitter, typename T = typename TEmitter::ctype>
+        static span_t FromValue(const T &value)
+        {
+            std::stringstream ss;
+            TEmitter::emit(ss, value);
+            
+            span_t span;
+            span.str = ss.str();
+
+            ParseJson(span.toks, span.str);
+
+            return span;
+        }
+
+        static std::optional<span_t> FromString(const std::string &value)
+        {
+            span_t span;
+            span.str = value;
+
+            if(ParseJson(span.toks, span.str))
+            {
+                return span;
+            }
+            else
+            {
+                return std::optional<span_t>();
+            }
+        }
+    };
+
+    #define IMPLEMENT_PARSER(name, type) static bool name ## _parse(const jsmntok_t *toks, int tok, const char *str, type &value)
+    #define IMPLEMENT_EMITTER(name, type) template<typename stream> static stream& name ## _emit(stream &s, type const&value)
+
+    #define TOK_TEXT (std::string_view(&str[toks[tok].start], static_cast<size_t>(toks[tok].end - toks[tok].start)))
+
+    #define TOK_CHAR (str[toks[tok].start])
+
+    #define TOK_TYPE (toks[tok].type)
+
+    #define TOK_ASSERT_TYPE(type) if(TOK_TYPE != type) return false
+
+    template<typename T>
+    using ctype_t = typename T::ctype;
 
     IMPLEMENT_PARSER(string, std::string)
     {
@@ -445,12 +552,14 @@ namespace jsontypes
 
     IMPLEMENT_PARSER(decimal, decimal_t)
     {
+        TOK_ASSERT_TYPE(JSMN_PRIMITIVE);
+
         auto const& t = toks[tok];
-        if(t.type != JSMN_PRIMITIVE) return false;
         char c = str[t.start];
-        if(c == '-' || (c >= '0' && c <= '9'))
+
+        if(c == '-' || c == '.' || (c >= '0' && c <= '9'))
         {
-            auto d = decimal_t::parse(&str[t.start], &str[t.end+1]);
+            auto d = decimal_t::parse(&str[t.start], &str[t.end]);
             if(d)
             {
                 value = std::move(d.value());
@@ -471,7 +580,7 @@ namespace jsontypes
         auto const& t = toks[tok];
         if(t.type == JSMN_PRIMITIVE && str[t.start] == 'n')
         {
-            value = null_t<T>(nullptr);
+            value = null_t<ctype_t<T>>(nullptr);
             return true;
         }
         else
@@ -479,7 +588,7 @@ namespace jsontypes
             ctype_t<T> v;
             if(T::parse(toks, tok, str, v))
             {
-                value = null_t<T>(std::move(v));
+                value = null_t<ctype_t<T>>(v);
                 return true;
             }
             else
@@ -647,14 +756,14 @@ namespace jsontypes
 
             tok = next_token(toks, tok);
 
-            value.push_back(std::make_pair(std::move(k, std::move(v))));
+            value.push_back(std::make_pair(std::move(k), std::move(v)));
         }
 
         return true;
     }
 
     template<typename K, typename V, typename stream>
-    static stream& pairs_emit(stream &s, std::map<ctype_t<K>, ctype_t<V>> const& value)
+    static stream& pairs_emit(stream &s, std::vector<std::pair<ctype_t<K>, ctype_t<V>>> const& value)
     {
         s << "{";
 
@@ -741,6 +850,21 @@ namespace jsontypes
         }
     };
 
+    struct decimal
+    {
+        typedef decimal_t ctype;
+        static bool parse(const jsmntok_t *toks, int tok, const char *str, ctype &value)
+        {
+            return decimal_parse(toks, tok, str, value);
+        }
+        
+        template<typename stream>
+        static stream& emit(stream &s, ctype const& value)
+        {
+            return decimal_emit(s, value);
+        }
+    };
+
     template<typename T>
     struct nullable
     {
@@ -810,11 +934,7 @@ namespace jsontypes
         typedef span_t ctype;
         static bool parse(const jsmntok_t *toks, int tok, const char *str, ctype &value)
         {
-            value = span_t();
-            value.toks = toks;
-            value.start = tok;
-            value.end = next_token(toks, tok);
-            value.str = str;
+            value = span_t(toks, tok, str);
             return true;
         }
         
@@ -842,11 +962,11 @@ namespace jsontypes
         public:
             enum { value = sizeof(check<_T>(0)) == sizeof(char) };
         };
-        template<typename _T>
+        template<typename stream, typename _T>
         struct _has_emit
         {
         private:
-            template<typename C> static char  check(decltype(&C::emit));
+            template<typename C> static char  check(decltype(&C::template emit<stream>));
             template<typename C> static short check(...);
         public:
             enum { value = sizeof(check<_T>(0)) == sizeof(char) };
@@ -874,12 +994,13 @@ namespace jsontypes
         template<typename stream>
         static stream& emit(stream &s, ctype const& value)
         {
-            std::visit([&s](auto&& arg) {
+            std::visit([&s](auto const& arg) {
 
-                (... || ([&s](auto const& arg) {
+                bool emitted = (... || ([&s](auto const& arg) {
                     using TParam = std::decay_t<decltype(arg)>;
                     using TEmitterParam = std::decay_t<jsonstruct_utils::param_type_t<T::template emit<stream>, 1>>;
-                    if constexpr(_has_emit<T>::value && std::is_same_v<TParam, TEmitterParam>)
+
+                    if constexpr(_has_emit<stream, T>::value && std::is_same_v<TParam, TEmitterParam>)
                     {
                         T::emit(s, arg);
                         return true;
@@ -887,9 +1008,12 @@ namespace jsontypes
                     return false;
                 })(arg));
 
+                if(!emitted) {
+                    throw std::runtime_error("could not emit");
+                }
+
             }, value);
             return s;
         }
     };
-
 }

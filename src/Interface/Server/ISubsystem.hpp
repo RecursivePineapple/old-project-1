@@ -9,7 +9,7 @@ namespace server
     {
         virtual ~ISubsystem() { }
 
-        virtual void OnMessage(CR<server::Message> msg) = 0;
+        virtual void OnMessage(ConnectionContext *sender, CR<server::Message> msg) = 0;
     
         bool bWantsEntityMessages = false;
         bool bWantsSubsystemMessages = true;

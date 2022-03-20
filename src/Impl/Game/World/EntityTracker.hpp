@@ -12,7 +12,7 @@
 
 #include "Common/Types.hpp"
 #include "Common/Transform.hpp"
-#include "Common/EntityMessage.hpp"
+#include "Common/Message.hpp"
 #include "Common/Event.hpp"
 
 #include "Interface/Game/INamedEntity.hpp"
@@ -113,37 +113,23 @@ namespace gamestate
             }
         }
 
-        void Dispatch(ConnectionContext *sender, CR<gamestate::EntityMessage> msg)
+        void Dispatch(ConnectionContext *sender, CR<server::Message> msg)
         {
             std::shared_lock lock(m_entities_lock);
 
-            auto iter = m_entities.find(msg.dst_id);
+            auto iter = m_entities.find(msg.id.value());
 
             if(iter == m_entities.end())
             {
                 std::stringstream ss;
-                EntityMessage::emit(ss, msg);
+                server::Message::emit(ss, msg);
                 spdlog::warn("received entity message for invalid entity: {0}", ss.str());
                 return;
             }
 
-            if(!msg.action)
+            if(msg.action)
             {
-                if(msg.transform)
-                {
-                    iter->second->OnUpdatePhysics(msg.transform.value());
-                }
-                else
-                {
-                    std::stringstream ss;
-                    EntityMessage::emit(ss, msg);
-                    spdlog::warn("received action-less entity message with no transform: {0}", ss.str());
-                    return;
-                }
-            }
-            else
-            {
-                iter->second->OnMessage(sender, msg);
+                iter->second->OnMessage(sender, msg.action.value(), msg.data);
             }
         }
 

@@ -4,6 +4,9 @@
 #include <uWebSockets/App.h>
 #include <Hypodermic/ContainerBuilder.h>
 
+#include "Utils/env.hpp"
+#include "Utils/jsonstruct.hpp"
+
 #include "Interface/Server/IServer.hpp"
 
 #include "Impl/Configure/ConfigureImpl.hpp"
@@ -55,13 +58,21 @@ int main(int argc, const char **argv)
 
     std::vector<std::thread> threads;
 
+    int port = 0;
+
+    if(!jsontypes::ParseJson<jsontypes::integer>(utils::getenv("WS_PORT", "9001"), port))
+    {
+        spdlog::error("Illegal port {0}. Exiting.", utils::getenv("WS_PORT", "9001"));
+        return 1;
+    }
+
     for(size_t i = 0; i < std::thread::hardware_concurrency(); ++i)
     {
-        threads.emplace_back([&container, i]()
+        threads.emplace_back([&container, i, port]()
         {
             uWS::App()
                 .ws<ConnectionContext>("/*", container->resolve<server::IServer>()->Behavior())
-                .listen(9001, [i](auto *listen_socket) {
+                .listen(port, [i](auto *listen_socket) {
                     if(listen_socket != nullptr)
                     {
                         spdlog::info("thread {0} listening on port {1}", i, 9001);

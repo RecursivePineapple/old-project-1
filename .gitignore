@@ -6,3 +6,5 @@ bin
 dep
 obj
 old
+output
+coverage

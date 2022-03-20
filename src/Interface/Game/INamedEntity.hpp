@@ -5,7 +5,7 @@
 #include "Common/Types.hpp"
 #include "Common/WorldTransform.hpp"
 #include "Common/Event.hpp"
-#include "Common/EntityMessage.hpp"
+#include "Common/ConnectionContext.hpp"
 
 namespace gamestate
 {
@@ -17,7 +17,7 @@ namespace gamestate
 
         virtual std::string EntityType() = 0;
 
-        virtual bool LoadState(CR<std::string> msg) = 0;
+        virtual bool LoadState(CR<jsontypes::span_t> msg) = 0;
         virtual std::string SaveState() = 0;
         
         virtual bool ShouldSave() { return true; }
@@ -27,9 +27,7 @@ namespace gamestate
         virtual void BeginPlay() { }
         virtual void EndPlay() { }
 
-        virtual void OnMessage(ConnectionContext *sender, CR<gamestate::EntityMessage> msg) = 0;
-    
-        virtual void OnUpdatePhysics(CR<Transform> transform) = 0;
+        virtual void OnMessage(ConnectionContext *sender, CR<std::string> action, std::optional<jsontypes::span_t> data) = 0;
 
         virtual Event<INamedEntity*>& OnMove() = 0;
         virtual Event<INamedEntity*>& OnStateChanged() = 0;

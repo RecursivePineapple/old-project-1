@@ -7,7 +7,7 @@
 
 struct decimal_t
 {
-    bool sign;
+    bool sign = true;
     std::vector<uint8_t> integral, frac;
 
     template<typename int_t = int32_t>

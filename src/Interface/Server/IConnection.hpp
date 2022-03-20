@@ -12,25 +12,31 @@ namespace server
     {
         virtual ~IConnection() { }
 
-        virtual void Send(const Message *msg) = 0;
-        virtual void SendBulk(const Message *data, size_t n) = 0;
+        virtual void SendUnsafe(CR<std::string> msg) = 0;
 
-        template<typename MessageType>
-        void Send(MessageType &&msg)
+        template<typename jtype>
+        void SendUnsafe(CR<typename jtype::ctype> x)
         {
-            Message const& m = msg;
-            return Send(&m);
+            std::stringstream ss;
+            jtype::emit(ss, x);
+            SendUnsafe(ss.str());
         }
 
-        template<typename Container>
-        void SendBulk(Container &&msgs)
+        void Send(CR<Message> msg)
         {
-            return SendBulk(static_cast<Message*>(msgs.data()), msgs.size());
+            std::stringstream ss;
+            Message::emit(ss, msg);
+            SendUnsafe(ss.str());
         }
 
-        void SendObject(CR<std::map<std::string, std::string>> obj)
+        void SendBulk(CR<std::vector<Message>> msgs)
         {
-            Send(server::StringMessage::Object(obj));
+            SendUnsafe<jsontypes::array<Message>>(msgs);
+        }
+
+        void SendBulk(CR<std::initializer_list<Message>> msgs)
+        {
+            SendUnsafe<jsontypes::array<Message>>(std::vector<Message>(msgs.begin(), msgs.end()));
         }
     };
 }
