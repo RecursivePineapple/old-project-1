@@ -7,7 +7,9 @@ CREATE TABLE session (
 
     client_addr INET,
 
-    host_addr INET
+    host_addr uuid NOT NULL,
+
+    constraint player_id_fk FOREIGN KEY(player_id) REFERENCES player(id)
 );
 
-create unique index on session(player_id);
+CREATE UNIQUE INDEX ON session(player_id);

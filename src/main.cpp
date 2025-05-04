@@ -1,8 +1,11 @@
 
+#pragma target server
+
 #include <thread>
 #include <spdlog/spdlog.h>
 #include <uWebSockets/App.h>
 #include <Hypodermic/ContainerBuilder.h>
+#include <curlpp/cURLpp.hpp>
 
 #include "Utils/env.hpp"
 #include "Utils/jsonstruct.hpp"
@@ -47,6 +50,8 @@ int main(int argc, const char **argv)
 
     spdlog::set_level(spdlog::level::trace);
 
+    cURLpp::Cleanup curl_initializer;
+
     Hypodermic::Logger::configureLogLevel(Hypodermic::LogLevels::Debug);
     Hypodermic::Logger::configureSink(std::make_shared<LoggerSink>());
 
@@ -62,7 +67,7 @@ int main(int argc, const char **argv)
 
     if(!jsontypes::ParseJson<jsontypes::integer>(utils::getenv("WS_PORT", "9001"), port))
     {
-        spdlog::error("Illegal port {0}. Exiting.", utils::getenv("WS_PORT", "9001"));
+        spdlog::critical("Illegal port {0}. Exiting.", utils::getenv("WS_PORT", "9001"));
         return 1;
     }
 
@@ -72,14 +77,14 @@ int main(int argc, const char **argv)
         {
             uWS::App()
                 .ws<ConnectionContext>("/*", container->resolve<server::IServer>()->Behavior())
-                .listen(port, [i](auto *listen_socket) {
+                .listen(port, [=](auto *listen_socket) {
                     if(listen_socket != nullptr)
                     {
-                        spdlog::info("thread {0} listening on port {1}", i, 9001);
+                        spdlog::info("thread {0} listening on port {1}", i, port);
                     }
                     else
                     {
-                        spdlog::error("thread {0} could not listen on port {1}", i, 9001);
+                        spdlog::error("thread {0} could not listen on port {1}", i, port);
                     }
                 })
                 .run();

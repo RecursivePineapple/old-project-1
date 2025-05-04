@@ -28,6 +28,8 @@ namespace gamestate
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureIPlayer
+
 namespace configure
 {
     void ConfigureIPlayer(Hypodermic::ContainerBuilder &container);

@@ -120,6 +120,8 @@ namespace server
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureIDispatcher
+
 namespace configure
 {
     void ConfigureIDispatcher(Hypodermic::ContainerBuilder &container);

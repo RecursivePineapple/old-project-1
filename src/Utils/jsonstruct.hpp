@@ -412,7 +412,10 @@ namespace jsontypes
 
         span_t() { }
 
-        span_t(const jsmntok_t *toks, int tok, const char *str) {
+        span_t(const std::vector<jsmntok_t> &toks_, const std::string &str_) : toks(toks_), str(str_) { }
+
+        span_t(const jsmntok_t *toks, int tok, const char *str)
+        {
             int next = next_token(toks, tok);
             
             this->str.assign(&str[toks[tok].start], &str[toks[next - 1].end+1]);

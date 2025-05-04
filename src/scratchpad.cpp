@@ -1,4 +1,6 @@
 
+#pragma target scratchpad
+
 #define PROFILER_PRINT_INTERVAL 1e9
 
 #include <ctime>

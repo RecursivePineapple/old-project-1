@@ -42,7 +42,7 @@ namespace gamestate
 
                 sender->m_player->GetConnection()->Send(
                     server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
-                    .data({
+                    .data_object({
                         {"world-id", world->GetId()}
                     })
                     .build()
@@ -56,7 +56,7 @@ namespace gamestate
                 {
                     sender->m_player->GetConnection()->Send(
                         server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
-                        .data({
+                        .data_object({
                             {"status", "error"},
                             {"message", "invalid message format"}
                         })
@@ -72,7 +72,7 @@ namespace gamestate
                 {
                     sender->m_player->GetConnection()->Send(
                         server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
-                        .data({
+                        .data_object({
                             {"status", "error"},
                         {"message", "could not find world"}
                         })
@@ -87,7 +87,7 @@ namespace gamestate
                 {
                     sender->m_player->GetConnection()->Send(
                         server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
-                        .data({
+                        .data_object({
                             {"status", "success"},
                             {"eid", e->GetId().to_string()}
                         })
@@ -98,7 +98,7 @@ namespace gamestate
                 {
                     sender->m_player->GetConnection()->Send(
                         server::MessageBuilder(server::MessageType::MESSAGE_TYPE_RESPONSE)
-                        .data({
+                        .data_object({
                             {"status", "error"}
                         })
                         .build()
@@ -112,6 +112,8 @@ namespace gamestate
 }
 
 #include <Hypodermic/ContainerBuilder.h>
+
+#pragma configurable ConfigureIDebugSubsystem
 
 namespace configure
 {

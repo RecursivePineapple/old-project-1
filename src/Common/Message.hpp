@@ -88,7 +88,7 @@ namespace server
         }
 
         #define X2(dtype, name) \
-        MessageBuilder& name(CR<dtype::ctype> name) \
+        MessageBuilder& name ## _object(CR<dtype::ctype> name) \
         { \
             msg.name = jsontypes::span_t::FromValue<dtype>(name); \
             return *this; \

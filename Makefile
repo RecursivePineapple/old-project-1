@@ -6,23 +6,10 @@ C_SRCS = \
 	$(shell find src -type f -name '*.cc') \
 	$(shell find src -type f -name '*.c')
 
-SRV_SRCS = \
-	src/main.cpp \
-	$(shell grep -l -E "^\#pragma target server$$" $(C_SRCS))
-
-SRV_TEST_SRCS = \
-	$(shell grep -l -E "^\#pragma target server-test$$" $(C_SRCS))
-
-SRV_DBG_SRCS = \
-	src/Utils/profiler.cpp \
-	src/Utils/base64.cpp \
-	$(shell grep -l -E "^\#pragma target server-debug$$" $(C_SRCS))
-
-SRP_SRCS = \
-	src/scratchpad.cpp \
-	src/Utils/profiler.cpp
-
-PROTOS =
+SRV_SRCS      = $(shell grep -l -E "^\#pragma target server$$" $(C_SRCS))
+SRV_TEST_SRCS = $(shell grep -l -E "^\#pragma target server-test$$" $(C_SRCS))
+SRV_DBG_SRCS  = $(shell grep -l -E "^\#pragma target server-debug$$" $(C_SRCS))
+SRP_SRCS      = $(shell grep -l -E "^\#pragma target scratchpad$$" $(C_SRCS))
 
 BINS = bin/server bin/scratchpad
 
@@ -32,7 +19,7 @@ endif
 
 ##############
 
-PKGS	   += openssl libpq librabbitmq
+PKGS	   += openssl libpq librabbitmq curlpp
 
 LIBS	   += -Lbin -lz -luuid -lusockets
 INCLS	   += -Isrc -I/usr/include/postgresql/14/server
@@ -61,8 +48,6 @@ CPPFLAGS   += $(CWARNINGS) -Wctor-dtor-privacy -Wnoexcept -Wold-style-cast \
 
 CFLAGS     += $(CWARNINGS)
 
-SANITIZERS += 
-
 ifeq "$(MAKECMDGOALS)" "test"
 DEBUG      ?= 1
 endif
@@ -79,22 +64,14 @@ CPPFLAGS   += -O3
 CFLAGS     += -O3
 endif
 
-ifeq "$(USE_CLANG)" "1"
-CPPFLAGS   += -fno-omit-frame-pointer -Wno-unknown-warning-option -Wunused-command-line-argument
-CFLAGS     += -fno-omit-frame-pointer -Wno-unknown-warning-option -Wunused-command-line-argument
 CC         := clang-11
 CXX        := clang++-11
-endif
 
-CPPFLAGS   += $(SANITIZERS) $(INCLS)
-CFLAGS     += $(SANITIZERS) $(INCLS)
+CPPFLAGS   += $(SANITIZERS) $(INCLS) -fno-omit-frame-pointer -Wno-unknown-warning-option -Wunused-command-line-argument
+CFLAGS     += $(SANITIZERS) $(INCLS) -fno-omit-frame-pointer -Wno-unknown-warning-option -Wunused-command-line-argument
 LDFLAGS    += $(SANITIZERS) -Wl,--as-needed $(LIBS)
 
 ##############
-
-PBGENS = \
-	$(patsubst src/%.proto, src/generated/%.pb.cc, $(PROTOS)) \
-	$(patsubst src/%.proto, src/generated/%.pb.h , $(PROTOS))
 
 HEADERS = \
 	$(shell find src -type f -name '*.h') \
@@ -111,20 +88,19 @@ SRCS = \
 SRV_OBJS      = $(patsubst src/%,obj/%.o,$(SRV_SRCS))
 SRP_OBJS      = $(patsubst src/%,obj/%.o,$(SRP_SRCS))
 SRV_TEST_OBJS = $(patsubst src/%,obj/%.o,$(SRV_TEST_SRCS))
-PCHS          = $(patsubst src/%,src/%.pch,$(shell grep -l -E "^\#pragma precompile-pch" $(HEADERS)))
 DEPS          = $(patsubst src/%,dep/%.d,$(SRCS))
 
 ##############
 
 .PHONY: all clean run run-tests watch-tests gen-report watch-server watch-docker-server
-.PRECIOUS: $(OBJS) $(PBGENS)
+.PRECIOUS: $(OBJS)
 
 all:
-	@$(MAKE) -s -j16 deps pchs
+	@$(MAKE) -s -j16 deps
 	@$(MAKE) -s -j16 bins
 
 clean:
-	- $(RM) -r bin obj dep coverage $(PBGENS) $(PCHS)
+	- $(RM) -r bin obj dep coverage
 
 run: bin/server
 	-bin/server
@@ -147,7 +123,7 @@ watch-docker-server:
 	@tput reset
 	@while true; do inotifywait -e modify,create,delete -r src >/dev/null 2>/dev/null && tput reset && $(MAKE) -j16 bin/server && docker cp bin/server magegame_server_1:/opt/server/bin/ && docker restart magegame_server_1; done
 
-coverage/lcov.info: bin/server-test $(shell find obj -name "*.gcd*" -type f)
+coverage/lcov.info: bin/server-test $(shell find obj -name "*.gcd*" -type f 2>/dev/null)
 	@mkdir -p coverage
 	@lcov --directory . --base-directory . --gcov-tool misc/gcov.sh --capture -o coverage/lcov_raw.info >/dev/null
 	@lcov --remove coverage/lcov_raw.info -o coverage/lcov.info '/usr/*' 'c++/*' 'cppunit/*' '*/src/Utils/jsmn.hpp' >/dev/null
@@ -158,8 +134,6 @@ gen-report: coverage/lcov.info
 bins: $(BINS)
 
 deps: $(DEPS)
-
-pchs: $(PCHS)
 
 bin/server: $(SRV_OBJS)
 	@mkdir -p $(shell dirname $@)
@@ -196,11 +170,6 @@ dep/%.c.d: src/%.c
 	@echo " [DEP] $<"
 	@$(CC) $(CFLAGS) -MG -MM $< -MQ $(patsubst src/%,obj/%.o,$<) -MF $@
 
-src/%.pch: src/%
-	@mkdir -p $(shell dirname $@)
-	@echo " [PCH] $<"
-	@$(CXX) $(CPPFLAGS) $< -o $@
-
 obj/%.cpp.o: src/%.cpp
 	@mkdir -p $(shell dirname $@)
 	@echo "  [CC] $<"
@@ -211,18 +180,7 @@ obj/%.c.o: src/%.c
 	@echo "  [CC] $<"
 	@$(CC) $(CFLAGS) -o $@ -c $<
 
-obj/%.pb.cc.o: src/%.pb.cc
-	@mkdir -p $(shell dirname $@)
-	@echo "[PBCC] $<"
-	@$(CXX) $(PBCPPFLAGS) -Wno-a -o $@ -c $<
-
-src/generated/%.pb.cc: src/%.proto
-	@mkdir -p $(shell dirname $@)
-	@echo "[PBUF] $<"
-	@cd src && protoc --cpp_out=generated $(patsubst src/%, %, $<)
-	@sed -i 's|#include\s*"src/|#include "./|g' $@
-
-src/generated/%.pb.h: src/generated/%.pb.cc
+include gen.mk
 
 ifneq "$(MAKECMDGOALS)" "clean"
 -include $(DEPS)

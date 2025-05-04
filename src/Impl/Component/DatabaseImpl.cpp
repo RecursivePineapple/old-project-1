@@ -8,6 +8,8 @@
 #include "Utils/dbwrapper/libpq.hpp"
 #include "Utils/env.hpp"
 
+#pragma configurable ConfigureDatabase
+
 namespace configure
 {
     namespace pq = dbwrapper::libpq;

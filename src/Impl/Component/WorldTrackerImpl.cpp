@@ -135,6 +135,8 @@ namespace gamestate
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureIWorldTracker
+
 namespace configure
 {
     void ConfigureIWorldTracker(Hypodermic::ContainerBuilder &container);

@@ -54,8 +54,11 @@ namespace gamestate
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureIUpdateTransmitter
+
 namespace configure
 {
+    void ConfigureIUpdateTransmitter(Hypodermic::ContainerBuilder &container);
     void ConfigureIUpdateTransmitter(Hypodermic::ContainerBuilder &container)
     {
         container.registerType<gamestate::UpdateTransmitter>().as<gamestate::IUpdateTransmitter>();

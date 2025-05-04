@@ -209,6 +209,8 @@ namespace gamestate
 
 #include "Impl/ConfigureImpl.hpp"
 
+// #pragma configurable ConfigureMainWorld
+
 namespace configure
 {
     void ConfigureMainWorld(Hypodermic::ContainerBuilder &container)

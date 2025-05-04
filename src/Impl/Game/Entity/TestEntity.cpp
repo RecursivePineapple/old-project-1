@@ -34,6 +34,8 @@ namespace gamestate
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureTestEntity
+
 namespace configure
 {
     void ConfigureTestEntity(Hypodermic::ContainerBuilder &container);

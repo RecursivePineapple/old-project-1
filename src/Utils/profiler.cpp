@@ -1,4 +1,7 @@
 
+#pragma target server-debug
+#pragma target scratchpad
+
 #ifdef DEBUG
 
 #include "profiler.hpp"

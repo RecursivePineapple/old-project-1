@@ -35,9 +35,21 @@ namespace server
         return false;
     }
 
+    template<typename TParser, typename T>
+    static bool ParseValue(const jsontypes::span_t &span, const std::string &key, T &value)
+    {
+        return ParseValue<TParser, T>(span.toks, 0, span.str, key, value);
+    }
+
     template<typename T>
     static bool ParseValue(const std::vector<jsmntok_t> &tok_buffer, int tok, const std::string &text, const std::string &key, T &value)
     {
         return ParseValue<T, T>(tok_buffer, tok, text, key, value);
+    }
+
+    template<typename T>
+    static bool ParseValue(const jsontypes::span_t &span, const std::string &key, T &value)
+    {
+        return ParseValue<T, T>(span, key, value);
     }
 }

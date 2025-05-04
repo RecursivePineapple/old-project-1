@@ -372,6 +372,8 @@ namespace gamestate {
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureHubWorld
+
 namespace configure {
     void ConfigureHubWorld(Hypodermic::ContainerBuilder &container);
     void ConfigureHubWorld(Hypodermic::ContainerBuilder &container) {

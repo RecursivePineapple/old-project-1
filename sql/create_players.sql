@@ -1,29 +1,29 @@
 
-drop table if exists player_data;
-drop table if exists player;
+DROP TABLE IF EXISTS player_data;
+DROP TABLE IF EXISTS player;
 
-create table player (
-	id uuid not null,
+CREATE TABLE player (
+	id uuid NOT NULL,
 
-	username varchar not null,
-	secret varchar not null,
+	username VARCHAR NOT NULL,
+	secret VARCHAR NOT NULL,
 
-	deleted boolean default false,
+	deleted BOOLEAN DEFAULT FALSE,
 
-	constraint player_pk primary key(id)
+	CONSTRAINT player_pk PRIMARY KEY(id)
 );
 
-create unique index on player(username);
+CREATE UNIQUE INDEX ON player(username);
 
-create table player_data (
-	player_id uuid not null,
+CREATE TABLE player_data (
+	player_id UUID NOT NULL,
 
-	rel varchar not null,
+	rel VARCHAR NOT NULL,
 
-	entity_id uuid not null,
+	data JSON NOT NULL,
 
-	constraint player_data_pk primary key (player_id),
-	constraint player_data_fk foreign key (player_id) references player(id) on delete no action
+	CONSTRAINT player_data_pk PRIMARY KEY (player_id),
+	CONSTRAINT player_data_fk FOREIGN KEY (player_id) REFERENCES player(id) ON DELETE NO ACTION
 );
 
-create index on player_data(player_id, rel);
+CREATE INDEX ON player_data(player_id, rel);

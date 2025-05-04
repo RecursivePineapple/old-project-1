@@ -8,3 +8,8 @@ obj
 old
 output
 coverage
+
+
+# Added by cargo
+
+/target

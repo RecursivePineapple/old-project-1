@@ -9,33 +9,49 @@
 
 #include "Common/Types.hpp"
 #include "Common/PlayerAuthInfo.hpp"
+#include "Common/ErrorCodes.hpp"
 
 #include "Interface/Subsystem/IPlayerSubsystem.hpp"
 #include "Interface/Component/IWorldTracker.hpp"
+#include "Interface/Component/IRequestDispatcher.hpp"
+#include "Interface/Game/MessageIO/Common.hpp"
 
 /* #region Queries */
 
-#define FIND_PLAYER_PARAMS(X) X(VARCHAR, username)
+#define FIND_SESSION_PARAMS(X) \
+    X(UUID, session)
 
-#define FIND_PLAYER_QUERY(param) \
-    pq::table tbl("player"); \
+#define LOCK_SESSION_PARAMS(X) \
+    X(UUID, session) \
+    X(VARCHAR, host_addr)
+
+#define UNLOCK_SESSION_PARAMS(X) \
+    X(UUID, session) \
+    X(VARCHAR, host_addr)
+
+#define FIND_SESSION_QUERY(param) \
+    pq::table tbl("session"); \
     std::string sql = tbl.select( \
-        tbl.col("secret"), tbl.col("world_id"), tbl.col("entity_id") \
+        tbl.col("player_id"), tbl.col("client_addr"), tbl.col("host_addr") \
     ).where( \
-        tbl.col("username") == param(username) && \
-        tbl.col("deleted") == false \
+        tbl.col("session_id") == param(session) \
     );
 
+#define LOCK_SESSION_QUERY(param) \
+    pq::table tbl("session"); \
+    std::string sql = tbl.update().set(tbl.col("host_addr"), param(host_addr)) \
+        .where(tbl.col("host_addr") == nullptr && tbl.col("session_id") == param(session));
+
 #define QUERIES_X(X) \
-  X(FindPlayer, FIND_PLAYER_PARAMS, FIND_PLAYER_QUERY)
+  X(FindSession, FIND_SESSION_PARAMS, FIND_SESSION_QUERY) \
+  X(LockSession, LOCK_SESSION_PARAMS, LOCK_SESSION_QUERY)
 
 /* #endregion */
 
 namespace server
 {
     #define PLAYER_AUTH_FIELDS(X) \
-        X(std::string, jsontypes::string, username) \
-        X(std::string, jsontypes::string, secret)
+        X(uuid, jsontypes::uuid, session_id)
 
     DECLARE_JSON_STRUCT(PlayerAuthMsg, PLAYER_AUTH_FIELDS)
 
@@ -47,10 +63,12 @@ namespace server
         PlayerSubsystem(
             SPCR<Hypodermic::Container> container,
             SPCR<gamestate::IWorldTracker> world_tracker,
-            SPCR<pq::database> db
+            SPCR<pq::database> db,
+            SPCR<gamestate::IRequestDispatcher> req
         ) : m_container(container),
             m_world_tracker(world_tracker),
-            m_db(db)
+            m_db(db),
+            m_req(req)
             { }
         
         void InitDB() { m_queries = PlayerQueries(m_db); }
@@ -60,73 +78,80 @@ namespace server
             return m_container->resolve<gamestate::IPlayer>();
         }
 
-        virtual void Disconnect(SPCR<gamestate::IPlayer>) override
+        virtual void Disconnect(SPCR<gamestate::IPlayer> player) override
         {
-
+            
         }
 
         virtual void OnMessage(ConnectionContext *sender, CR<server::Message> msg) override
         {
-            if(msg.action == "set-auth-token")
+            if(msg.action == "set-session")
             {
                 PlayerAuthMsg auth;
 
-                auto player = sender->m_player;
-                auto conn = player->GetConnection();
-
-                if(!msg.data || !msg.data->ParseInto<PlayerAuthMsg>(auth) || auth.username.empty())
+                if(!msg.data || !msg.data->ParseInto<PlayerAuthMsg>(auth))
                 {
-                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
-                        {"message", "invalid message format"}
-                    }).build());
-
-                    spdlog::debug("player auth message handled but not valid");
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::InvalidFormat);
                     return;
                 }
 
-                auto res = m_queries.FindPlayer(auth.username);
+                auto res = m_queries.FindSession(auth.session_id);
 
                 if(res.ntuples() != 1)
                 {
-                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
-                        {"message", "invalid token"}
-                    }).build());
-
-                    spdlog::debug("auth attempt for user {0} had invalid username", auth.username);
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::MissingSession);
                     return;
                 }
 
-                auto tpl = pq::to_nonoptional_tuple<std::string, uuid, uuid>(res, 0);
+                auto tpl = pq::to_nonoptional_tuple<uuid, std::string, std::optional<std::string>>(res, 0);
 
                 if(!tpl)
                 {
-                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
-                        {"message", "invalid username or secret"}
-                    }).build());
-                    spdlog::debug("auth attempt for user {0} had invalid username", auth.username);
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::InvalidSession);
                     return;
                 }
 
-                auto [secret, world_id, entity_id] = tpl.value();
+                auto [player_id, client_addr, host_addr] = tpl.value();
 
-                if(secret != auth.secret)
+                if(client_addr != sender->m_remote_address)
                 {
-                    conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("reject-auth").data({
-                        {"message", "invalid username or secret"}
-                    }).build());
-                    spdlog::debug("auth attempt for user {0} had invalid secret", auth.username);
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::InvalidSessionClient);
                     return;
                 }
 
-                player->SetAuthInfo(gamestate::PlayerAuthInfo(auth.username, world_id, entity_id));
+                if(host_addr)
+                {
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::SessionAlreadyRunning);
+                    return;
+                }
 
-                conn->Send(MessageBuilder(MessageType::MESSAGE_TYPE_SUBSYSTEM_ACTION).action("accept-auth").build());
+                auto hostname_req = m_req->GetLocalAddress();
+                if(hostname_req.wait_for(std::chrono::seconds(5)) == std::future_status::timeout)
+                {
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::AddrFetchTimeout);
+                    return;
+                }
+
+                auto hostname = hostname_req.get();
+
+                if(!hostname)
+                {
+                    gamestate::net::SendSubsystemAction(sender, "invalid-session", error::Session::AddrFetchError);
+                    return;
+                }
+
+                spdlog::debug("player authenticated as {0} with world_id {1} and entity_id {2}",);
+                m_queries.LockSession(auth.session_id, );
+
+                sender->m_player->SetAuthInfo(gamestate::PlayerAuthInfo(auth.username, world_id, entity_id));
+
+                gamestate::net::SendSubsystemAction(sender, "valid-session", error::Success);
                 spdlog::debug("player authenticated as {0} with world_id {1} and entity_id {2}",
-                    auth.username,
-                    world_id.to_string(),
+                    auth.session_id,
+                    player_id.to_string(),
                     entity_id.to_string());
 
-                OnPlayerLoggedIn(player);
+                OnPlayerLoggedIn(sender->m_player);
             }
         }
 
@@ -142,6 +167,7 @@ namespace server
     private:
         SP<Hypodermic::Container> m_container;
         SP<gamestate::IWorldTracker> m_world_tracker;
+        SP<gamestate::IRequestDispatcher> m_req;
         SP<pq::database> m_db;
         PlayerQueries m_queries;
     };
@@ -149,6 +175,8 @@ namespace server
 
 
 #include <Hypodermic/ContainerBuilder.h>
+
+#pragma configurable ConfigureIPlayerSubsystem
 
 namespace configure
 {

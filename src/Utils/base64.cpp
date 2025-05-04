@@ -6,6 +6,8 @@
  * See README for more details.
  */
 
+#pragma target server-debug
+
 #include "base64.hpp"
 
 #include <string.h>

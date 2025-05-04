@@ -102,6 +102,8 @@ namespace server
 
 #include <Hypodermic/ContainerBuilder.h>
 
+#pragma configurable ConfigureIServer
+
 namespace configure
 {
     void ConfigureIServer(Hypodermic::ContainerBuilder &container);
